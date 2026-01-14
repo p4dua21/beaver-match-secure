@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Beaver Match Pro | Lender Decision Engine</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function LenderMatchingApp() {
+      const [formData, setFormData] = useState({
+        loanAmount: "",
+        lendeeAge: "",
+        creditScore: "",
+        entityType: "PtyLtd",
+        abnAge: "",
+        gstRegistered: "Yes",
+        assetType: "Asset_Car",
+        assetAge: "0",
+        balloonPercent: "0",
+        isHomeOwner: "No",
+        isAssetBacked: "No",
+        provideBankStatements: "Yes"
+      });
+
+      const [lenders, setLenders] = useState([]);
+      const [results, setResults] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState(null);
+
+      useEffect(() => {
+        loadSheets();
+      }, []);
+
+      async function loadSheets() {
+        setLoading(true);
+        setError(null);
+        try {
+          // Call our secure backend function
+          const response = await fetch('/api/get-lenders');
+          
+          if (!response.ok) {
+            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+          }
+
+          const data = await response.json();
+
+          if (data.error) {
+            throw new Error(data.error);
+          }
+
+          if (!data.values || data.values.length === 0) {
+            throw new Error("No data returned from server");
+          }
+
+          const headers = data.values[0];
+          const parsed = [];
+
+          for (let i = 1; i < data.values.length; i++) {
+            const row = data.values[i];
+            let obj = {};
+            headers.forEach((header, idx) => {
+              if (header && header.trim()) {
+                obj[header.trim()] = (row[idx] || '').toString().trim();
+              }
+            });
+            if (obj.Lender_Name && obj.Lender_Name.length > 0) {
+              parsed.push(obj);
+            }
+          }
+
+          setLenders(parsed);
+        } catch (err) {
+          console.error("Load error:", err);
+          setError(err.message);
+        }
+        setLoading(false);
+      }
+
+      function meetsMinCreditScore(userScore, lenderRequirement) {
+        if (!lenderRequirement) return true;
+        const score = parseInt(userScore);
+        const req = lenderRequirement.toLowerCase();
+        if (!isNaN(parseInt(lenderRequirement))) {
+          return score >= parseInt(lenderRequirement);
+        }
+        if (req.includes("good") || req === "satisfactory") return score >= 650;
+        if (req.includes("solid")) return score >= 600;
+        if (req.includes("ccr tiers")) return score >= 500;
+        return true;
+      }
+
+      function meetsAgeRestriction(userAge, restriction) {
+        if (!restriction || restriction === "None") return true;
+        const age = parseInt(userAge);
+        if (restriction.includes("25")) return age >= 25;
+        return true;
+      }
+
+      function meetsEntityRequirement(userEntity, lender) {
+        if (lender.Pty_Ltd_Only === "Yes" && userEntity !== "PtyLtd") return false;
+        if (lender.Sole_Trader_Only === "Yes" && userEntity !== "SoleTrader") return false;
+        return true;
+      }
+
+      function calculateMatch() {
+        if (!formData.loanAmount) {
+          alert("Please enter a loan amount");
+          return;
+        }
+
+        const scored = lenders.map(l => {
+          let score = 60;
+          let reasons = [];
+          let isExcluded = false;
+
+          if (!meetsEntityRequirement(formData.entityType, l)) isExcluded = true;
+
+          const loanAmt = parseFloat(formData.loanAmount);
+          if (l.Min_Loan_Amount && loanAmt < parseFloat(l.Min_Loan_Amount)) isExcluded = true;
+          if (l.Max_Loan_Amount && loanAmt > parseFloat(l.Max_Loan_Amount)) isExcluded = true;
+
+          if (!meetsAgeRestriction(formData.lendeeAge, l.Age_Restrictions)) isExcluded = true;
+          if (!meetsMinCreditScore(formData.creditScore, l.Equifax_Credit_Score)) isExcluded = true;
+
+          if (l.Age_Asset_Limit && parseInt(formData.assetAge) > parseInt(l.Age_Asset_Limit)) isExcluded = true;
+
+          if (l.Requires_GST_Registration === "Yes" && formData.gstRegistered !== "Yes") isExcluded = true;
+
+          if (l.Min_ABN_Age_Months && parseInt(formData.abnAge) < parseInt(l.Min_ABN_Age_Months)) isExcluded = true;
+
+          if (l.Min_GST_Age_Months && formData.gstRegistered === "Yes") {
+            if (parseInt(formData.abnAge) < parseInt(l.Min_GST_Age_Months)) isExcluded = true;
+          }
+
+          const balloonPct = parseFloat(formData.balloonPercent);
+          if (l.Balloon_Max && balloonPct > parseFloat(l.Balloon_Max)) isExcluded = true;
+
+          if (formData.isHomeOwner === "Yes" && l.Residential_Required === "Yes") {
+            score += 15;
+            reasons.push("Homeowner match");
+          }
+
+          if (formData.isAssetBacked === "Yes") {
+            score += 10;
+            reasons.push("Asset-backed");
+          }
+
+          if (formData.provideBankStatements === "Yes" && l.Need_Bank_Statements === "No") {
+            score += 10;
+            reasons.push("Low doc available");
+          } else if (formData.provideBankStatements === "Yes" && l.Need_Bank_Statements === "Yes") {
+            score += 5;
+            reasons.push("Full doc ready");
+          }
+
+          if (l.Requires_GST_Registration === "No") {
+            score += 5;
+            reasons.push("No GST required");
+          }
+
+          if (l.Accepts_Poor_Credit === "Yes" && parseInt(formData.creditScore) < 650) {
+            score += 15;
+            reasons.push("Credit flexible");
+          }
+
+          if (parseInt(formData.creditScore) >= 700) {
+            score += 10;
+            reasons.push("Strong credit");
+          }
+
+          return { ...l, finalScore: Math.min(score, 100), reasons, isExcluded };
+        })
+        .filter(l => !l.isExcluded)
+        .sort((a, b) => b.finalScore - a.finalScore);
+
+        setResults(scored);
+      }
+
+      const update = (f, v) => setFormData(p => ({ ...p, [f]: v }));
+
+      return (
+        <div className="min-h-screen bg-gray-50 py-8 px-4">
+          <div className="max-w-4xl mx-auto">
+            <div className="text-center mb-8">
+              <h1 className="text-4xl font-bold text-red-600 mb-2">Beaver Match Pro</h1>
+              <p className="text-gray-600">Lender Decision Engine</p>
+              {loading && <p className="text-sm text-gray-500 mt-2">Loading lenders...</p>}
+              {!loading && !error && <p className="text-sm text-gray-500 mt-2">{lenders.length} lenders available</p>}
+              {error && (
+                <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4">
+                  <p className="text-red-800 font-medium">Error loading lenders</p>
+                  <p className="text-red-700 text-sm mt-1">{error}</p>
+                  <button 
+                    onClick={loadSheets}
+                    className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
+                  >
+                    Try again
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Loan Amount ($)</label>
+                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter loan amount" value={formData.loanAmount} onChange={e => update("loanAmount", e.target.value)} />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Applicant Age</label>
+                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter age" value={formData.lendeeAge} onChange={e => update("lendeeAge", e.target.value)} />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Credit Score</label>
+                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter credit score" value={formData.creditScore} onChange={e => update("creditScore", e.target.value)} />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Entity Type</label>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.entityType} onChange={e => update("entityType", e.target.value)}>
+                    <option value="PtyLtd">Pty Ltd</option>
+                    <option value="SoleTrader">Sole Trader</option>
+                    <option value="Trust">Trust</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">ABN Age (months)</label>
+                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter ABN age in months" value={formData.abnAge} onChange={e => update("abnAge", e.target.value)} />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">GST Registered?</label>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.gstRegistered} onChange={e => update("gstRegistered", e.target.value)}>
+                    <option value="Yes">Yes</option>
+                    <option value="No">No</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Asset Type</label>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.assetType} onChange={e => update("assetType", e.target.value)}>
+                    <option value="Asset_Car">Car / Van</option>
+                    <option value="Asset_Truck">Truck / Heavy Vehicle</option>
+                    <option value="Asset_Equipment">Equipment</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Asset Age</label>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.assetAge} onChange={e => update("assetAge", e.target.value)}>
+                    <option value="0">New (0 years)</option>
+                    <option value="5">5 years</option>
+                    <option value="10">10 years</option>
+                    <option value="15">15 years</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Balloon Payment %</label>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.balloonPercent} onChange={e => update("balloonPercent", e.target.value)}>
+                    <option value="0">0%</option>
+                    <option value="20">20%</option>
+                    <option value="30">30%</option>
+                    <option value="40">40%</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="flex items-center space-x-3">
+                    <input type="checkbox" className="w-5 h-5 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.isHomeOwner === "Yes"} onChange={e => update("isHomeOwner", e.target.checked ? "Yes" : "No")} />
+                    <span className="text-sm font-medium text-gray-700">Home Owner</span>
+                  </label>
+                </div>
+
+                <div>
+                  <label className="flex items-center space-x-3">
+                    <input type="checkbox" className="w-5 h-5 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.isAssetBacked === "Yes"} onChange={e => update("isAssetBacked", e.target.checked ? "Yes" : "No")} />
+                    <span className="text-sm font-medium text-gray-700">Asset Backed</span>
+                  </label>
+                </div>
+
+                <div>
+                  <label className="flex items-center space-x-3">
+                    <input type="checkbox" className="w-5 h-5 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.provideBankStatements === "Yes"} onChange={e => update("provideBankStatements", e.target.checked ? "Yes" : "No")} />
+                    <span className="text-sm font-medium text-gray-700">Can Provide Bank Statements</span>
+                  </label>
+                </div>
+
+                <button onClick={calculateMatch} disabled={lenders.length === 0} className="w-full bg-red-600 text-white py-3 px-6 rounded-md font-semibold hover:bg-red-700 transition-colors duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                  Find Matching Lenders
+                </button>
+              </div>
+            </div>
+
+            {results && (
+              <div className="space-y-4">
+                <h2 className="text-2xl font-bold text-gray-900 mb-4">Matching Lenders ({results.length})</h2>
+                {results.length === 0 && (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+                    <p className="text-yellow-800 font-medium">No matching lenders found.</p>
+                    <p className="text-yellow-700 text-sm mt-2">Try adjusting your criteria: loan amount, credit score, asset age, balloon %, or GST status.</p>
+                  </div>
+                )}
+                {results.map((lender, idx) => (
+                  <div key={idx} className="bg-white rounded-lg shadow-md p-6 border-l-4 border-red-600">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="text-xl font-bold text-gray-900">{lender.Lender_Name}</h3>
+                        <p className="text-sm text-gray-600 mt-1">Match Score: {lender.finalScore}%</p>
+                      </div>
+                      <div>
+                        <span className={`px-3 py-1 rounded-full text-sm font-semibold ${lender.finalScore >= 80 ? 'bg-green-100 text-green-800' : lender.finalScore >= 70 ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                          {lender.finalScore >= 80 ? 'Excellent' : lender.finalScore >= 70 ? 'Good' : 'Fair'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                      <div>
+                        <p className="text-xs text-gray-500">Loan Range</p>
+                        <p className="text-sm font-semibold text-gray-900">${lender.Min_Loan_Amount || '0'} - ${lender.Max_Loan_Amount || 'No Max'}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Max Term</p>
+                        <p className="text-sm font-semibold text-gray-900">{lender.Loan_Length || '60'} months</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Max Balloon</p>
+                        <p className="text-sm font-semibold text-gray-900">{lender.Balloon_Max || '0'}%</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Doc Type</p>
+                        <p className="text-sm font-semibold text-gray-900">{lender.Need_Bank_Statements === "Yes" ? "Full Doc" : "Low Doc"}</p>
+                      </div>
+                    </div>
+
+                    {lender.Special_Notes && (
+                      <div className="bg-gray-50 rounded p-3 mb-4">
+                        <p className="text-sm text-gray-700"><span className="font-semibold">Notes:</span> {lender.Special_Notes}</p>
+                      </div>
+                    )}
+
+                    {lender.reasons.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {lender.reasons.map((reason, i) => (
+                          <span key={i} className="bg-red-50 text-red-700 px-3 py-1 rounded-full text-xs font-medium">✓ {reason}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<LenderMatchingApp />);
+  </script>
+</body>
+</html>
