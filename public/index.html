@@ -25,6 +25,7 @@
         gstRegistered: "Yes",
         assetType: "Asset_Car",
         assetAge: "0",
+        loanTerm: "60",
         balloonPercent: "0",
         residentialProof: "No",
         isHomeOwner: "No",
@@ -182,6 +183,17 @@
             if (assetAge > parseInt(l.Age_Asset_Limit)) isExcluded = true;
           }
 
+          // HARD STOP: Asset age at end of loan term
+          if (l.Max_Asset_Age_End_of_Term) {
+            const currentAssetAge = formData.assetAge === "15+" ? 16 : parseInt(formData.assetAge);
+            const loanTermYears = parseInt(formData.loanTerm) / 12;
+            const assetAgeAtEndOfTerm = currentAssetAge + loanTermYears;
+            
+            if (assetAgeAtEndOfTerm > parseInt(l.Max_Asset_Age_End_of_Term)) {
+              isExcluded = true;
+            }
+          }
+
           if (l.Requires_GST_Registration === "Yes" && formData.gstRegistered !== "Yes") isExcluded = true;
 
           if (l.Min_ABN_Age_Months && parseABNMonths(formData.abnAge) < parseInt(l.Min_ABN_Age_Months)) isExcluded = true;
@@ -331,6 +343,19 @@
                     <option value="14">14 years</option>
                     <option value="15">15 years</option>
                     <option value="15+">15+ years</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Loan Term</label>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.loanTerm} onChange={e => update("loanTerm", e.target.value)}>
+                    <option value="12">12 months (1 year)</option>
+                    <option value="24">24 months (2 years)</option>
+                    <option value="36">36 months (3 years)</option>
+                    <option value="48">48 months (4 years)</option>
+                    <option value="60">60 months (5 years)</option>
+                    <option value="72">72 months (6 years)</option>
+                    <option value="84">84 months (7 years)</option>
                   </select>
                 </div>
 
