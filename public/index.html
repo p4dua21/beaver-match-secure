@@ -18,10 +18,10 @@
     function LenderMatchingApp() {
       const [formData, setFormData] = useState({
         loanAmount: "",
-        lendeeAge: "",
+        lendeeAge: "25+",
         creditScore: "",
         entityType: "PtyLtd",
-        abnAge: "",
+        abnAge: "N/A - 3 months",
         gstRegistered: "Yes",
         assetType: "Asset_Car",
         assetAge: "0",
@@ -100,9 +100,28 @@
 
       function meetsAgeRestriction(userAge, restriction) {
         if (!restriction || restriction === "None") return true;
-        const age = parseInt(userAge);
-        if (restriction.includes("25")) return age >= 25;
+        
+        // Parse user age selection
+        const userIs25Plus = userAge === "25+";
+        
+        // Check if lender requires 25+
+        if (restriction.includes("25")) {
+          return userIs25Plus;
+        }
+        
         return true;
+      }
+
+      function parseABNMonths(abnSelection) {
+        const mapping = {
+          "N/A - 3 months": 0,
+          "3-6": 3,
+          "6-12": 6,
+          "1-2 year": 12,
+          "2-3 year": 24,
+          "3 + year": 36
+        };
+        return mapping[abnSelection] || 0;
       }
 
       function meetsEntityRequirement(userEntity, lender) {
@@ -158,14 +177,17 @@
           if (!meetsAgeRestriction(formData.lendeeAge, l.Age_Restrictions)) isExcluded = true;
           if (!meetsMinCreditScore(formData.creditScore, l.Equifax_Credit_Score)) isExcluded = true;
 
-          if (l.Age_Asset_Limit && parseInt(formData.assetAge) > parseInt(l.Age_Asset_Limit)) isExcluded = true;
+          if (l.Age_Asset_Limit) {
+            const assetAge = formData.assetAge === "15+" ? 16 : parseInt(formData.assetAge);
+            if (assetAge > parseInt(l.Age_Asset_Limit)) isExcluded = true;
+          }
 
           if (l.Requires_GST_Registration === "Yes" && formData.gstRegistered !== "Yes") isExcluded = true;
 
-          if (l.Min_ABN_Age_Months && parseInt(formData.abnAge) < parseInt(l.Min_ABN_Age_Months)) isExcluded = true;
+          if (l.Min_ABN_Age_Months && parseABNMonths(formData.abnAge) < parseInt(l.Min_ABN_Age_Months)) isExcluded = true;
 
           if (l.Min_GST_Age_Months && formData.gstRegistered === "Yes") {
-            if (parseInt(formData.abnAge) < parseInt(l.Min_GST_Age_Months)) isExcluded = true;
+            if (parseABNMonths(formData.abnAge) < parseInt(l.Min_GST_Age_Months)) isExcluded = true;
           }
 
           const balloonPct = parseFloat(formData.balloonPercent);
@@ -240,7 +262,10 @@
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Applicant Age</label>
-                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter age" value={formData.lendeeAge} onChange={e => update("lendeeAge", e.target.value)} />
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.lendeeAge} onChange={e => update("lendeeAge", e.target.value)}>
+                    <option value="18-25">18-25</option>
+                    <option value="25+">25+</option>
+                  </select>
                 </div>
 
                 <div>
@@ -258,8 +283,15 @@
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">ABN Age (months)</label>
-                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter ABN age in months" value={formData.abnAge} onChange={e => update("abnAge", e.target.value)} />
+                  <label className="block text-sm font-medium text-gray-700 mb-2">ABN Age</label>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.abnAge} onChange={e => update("abnAge", e.target.value)}>
+                    <option value="N/A - 3 months">N/A - 3 months</option>
+                    <option value="3-6">3-6 months</option>
+                    <option value="6-12">6-12 months</option>
+                    <option value="1-2 year">1-2 years</option>
+                    <option value="2-3 year">2-3 years</option>
+                    <option value="3 + year">3+ years</option>
+                  </select>
                 </div>
 
                 <div>
@@ -283,9 +315,22 @@
                   <label className="block text-sm font-medium text-gray-700 mb-2">Asset Age</label>
                   <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.assetAge} onChange={e => update("assetAge", e.target.value)}>
                     <option value="0">New (0 years)</option>
+                    <option value="1">1 year</option>
+                    <option value="2">2 years</option>
+                    <option value="3">3 years</option>
+                    <option value="4">4 years</option>
                     <option value="5">5 years</option>
+                    <option value="6">6 years</option>
+                    <option value="7">7 years</option>
+                    <option value="8">8 years</option>
+                    <option value="9">9 years</option>
                     <option value="10">10 years</option>
+                    <option value="11">11 years</option>
+                    <option value="12">12 years</option>
+                    <option value="13">13 years</option>
+                    <option value="14">14 years</option>
                     <option value="15">15 years</option>
+                    <option value="15+">15+ years</option>
                   </select>
                 </div>
 
@@ -293,8 +338,13 @@
                   <label className="block text-sm font-medium text-gray-700 mb-2">Balloon Payment %</label>
                   <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.balloonPercent} onChange={e => update("balloonPercent", e.target.value)}>
                     <option value="0">0%</option>
+                    <option value="5">5%</option>
+                    <option value="10">10%</option>
+                    <option value="15">15%</option>
                     <option value="20">20%</option>
+                    <option value="25">25%</option>
                     <option value="30">30%</option>
+                    <option value="35">35%</option>
                     <option value="40">40%</option>
                   </select>
                 </div>
