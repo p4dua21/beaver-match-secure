@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Beavers Match Pro | Lender Decision Engine</title>
+  <title>Beaver Match Pro | Lender Decision Engine</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -26,7 +26,7 @@
         assetType: "Asset_Car",
         assetAge: "0",
         balloonPercent: "0",
-        isHomeOwner: "No",
+        residentialProof: "No",
         isAssetBacked: "No",
         provideBankStatements: "Yes"
       });
@@ -34,7 +34,6 @@
       const [lenders, setLenders] = useState([]);
       const [results, setResults] = useState(null);
       const [loading, setLoading] = useState(false);
-      const [error, setError] = useState(null);
 
       useEffect(() => {
         loadSheets();
@@ -42,23 +41,18 @@
 
       async function loadSheets() {
         setLoading(true);
-        setError(null);
         try {
-          // Call our secure backend function
+          // Call your Netlify function instead of Google Sheets directly
           const response = await fetch('/api/get-lenders');
           
           if (!response.ok) {
-            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+            throw new Error(`API returned ${response.status}`);
           }
 
           const data = await response.json();
 
-          if (data.error) {
-            throw new Error(data.error);
-          }
-
           if (!data.values || data.values.length === 0) {
-            throw new Error("No data returned from server");
+            throw new Error("No data returned from API");
           }
 
           const headers = data.values[0];
@@ -80,7 +74,7 @@
           setLenders(parsed);
         } catch (err) {
           console.error("Load error:", err);
-          setError(err.message);
+          alert("Failed to load data: " + err.message);
         }
         setLoading(false);
       }
@@ -96,6 +90,38 @@
         if (req.includes("solid")) return score >= 600;
         if (req.includes("ccr tiers")) return score >= 500;
         return true;
+      }
+
+      function meetsResidentialRequirement(userProof, lenderRequirement) {
+        // If lender doesn't require residential proof, always pass
+        if (!lenderRequirement || lenderRequirement === "No") return true;
+        
+        // If user can't provide any proof and lender requires it, fail
+        if (userProof === "No") return false;
+        
+        // Map user proof to months
+        const userMonths = {
+          "No": 0,
+          "6 months": 6,
+          "12 months": 12,
+          "24 months +": 24
+        }[userProof] || 0;
+        
+        // Parse lender requirement (handle various formats)
+        const req = lenderRequirement.toString().toLowerCase();
+        let requiredMonths = 0;
+        
+        if (req.includes("24") || req.includes("2 year") || req.includes("24 month")) {
+          requiredMonths = 24;
+        } else if (req.includes("12") || req.includes("1 year") || req.includes("12 month")) {
+          requiredMonths = 12;
+        } else if (req.includes("6") || req.includes("6 month")) {
+          requiredMonths = 6;
+        } else if (req === "yes" || req === "required") {
+          requiredMonths = 6; // Default to 6 months if just "Yes"
+        }
+        
+        return userMonths >= requiredMonths;
       }
 
       function meetsAgeRestriction(userAge, restriction) {
@@ -144,22 +170,19 @@
           const balloonPct = parseFloat(formData.balloonPercent);
           if (l.Balloon_Max && balloonPct > parseFloat(l.Balloon_Max)) isExcluded = true;
 
-          if (formData.isHomeOwner === "Yes" && l.Residential_Required === "Yes") {
-            score += 15;
-            reasons.push("Homeowner match");
+          // HARD STOP: Residential requirement
+          if (l.Residential_Required === "Yes" && formData.isHomeOwner !== "Yes") {
+            isExcluded = true;
+          }
+
+          // HARD STOP: Bank statements requirement
+          if (l.Need_Bank_Statements === "Yes" && formData.provideBankStatements !== "Yes") {
+            isExcluded = true;
           }
 
           if (formData.isAssetBacked === "Yes") {
             score += 10;
             reasons.push("Asset-backed");
-          }
-
-          if (formData.provideBankStatements === "Yes" && l.Need_Bank_Statements === "No") {
-            score += 10;
-            reasons.push("Low doc available");
-          } else if (formData.provideBankStatements === "Yes" && l.Need_Bank_Statements === "Yes") {
-            score += 5;
-            reasons.push("Full doc ready");
           }
 
           if (l.Requires_GST_Registration === "No") {
@@ -193,20 +216,7 @@
             <div className="text-center mb-8">
               <h1 className="text-4xl font-bold text-red-600 mb-2">Beaver Match Pro</h1>
               <p className="text-gray-600">Lender Decision Engine</p>
-              {loading && <p className="text-sm text-gray-500 mt-2">Loading lenders...</p>}
-              {!loading && !error && <p className="text-sm text-gray-500 mt-2">{lenders.length} lenders available</p>}
-              {error && (
-                <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4">
-                  <p className="text-red-800 font-medium">Error loading lenders</p>
-                  <p className="text-red-700 text-sm mt-1">{error}</p>
-                  <button 
-                    onClick={loadSheets}
-                    className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
-                  >
-                    Try again
-                  </button>
-                </div>
-              )}
+              <p className="text-sm text-gray-500 mt-2">{loading ? 'Loading...' : `${lenders.length} lenders available`}</p>
             </div>
 
             <div className="bg-white rounded-lg shadow-md p-6 mb-6">
@@ -298,7 +308,7 @@
                   </label>
                 </div>
 
-                <button onClick={calculateMatch} disabled={lenders.length === 0} className="w-full bg-red-600 text-white py-3 px-6 rounded-md font-semibold hover:bg-red-700 transition-colors duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                <button onClick={calculateMatch} className="w-full bg-red-600 text-white py-3 px-6 rounded-md font-semibold hover:bg-red-700 transition-colors duration-200">
                   Find Matching Lenders
                 </button>
               </div>
