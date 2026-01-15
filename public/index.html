@@ -27,6 +27,7 @@
         assetAge: "0",
         loanTerm: "60",
         balloonPercent: "0",
+        depositPercent: "0", // NEW FIELD
         residentialProof: "No",
         isHomeOwner: "No",
         isAssetBacked: "No",
@@ -86,6 +87,18 @@
         setLoading(false);
       }
 
+      // --- HELPER LOGIC FOR DEPOSIT HARDSTOP ---
+      function parseDepositRequirement(reqString) {
+        if (!reqString) return 0;
+        const str = reqString.toLowerCase();
+        
+        if (str.includes("doesn't qualify")) return 999; // High hurdle to force exclusion
+        
+        // Matches the first number found before a % sign (e.g., "20% Deposit" -> 20)
+        const match = str.match(/(\d+)%/);
+        return match ? parseInt(match[1]) : 0;
+      }
+
       function meetsMinCreditScore(userScore, lenderRequirement) {
         if (!lenderRequirement) return true;
         const score = parseInt(userScore);
@@ -101,26 +114,14 @@
 
       function meetsAgeRestriction(userAge, restriction) {
         if (!restriction || restriction === "None") return true;
-        
-        // Parse user age selection
         const userIs25Plus = userAge === "25+";
-        
-        // Check if lender requires 25+
-        if (restriction.includes("25")) {
-          return userIs25Plus;
-        }
-        
+        if (restriction.includes("25")) return userIs25Plus;
         return true;
       }
 
       function parseABNMonths(abnSelection) {
         const mapping = {
-          "N/A - 3 months": 0,
-          "3-6": 3,
-          "6-12": 6,
-          "1-2 year": 12,
-          "2-3 year": 24,
-          "3 + year": 36
+          "N/A - 3 months": 0, "3-6": 3, "6-12": 6, "1-2 year": 12, "2-3 year": 24, "3 + year": 36
         };
         return mapping[abnSelection] || 0;
       }
@@ -134,27 +135,13 @@
       function meetsResidentialRequirement(userProof, lenderRequirement) {
         if (!lenderRequirement || lenderRequirement === "No") return true;
         if (userProof === "No") return false;
-        
-        const userMonths = {
-          "No": 0,
-          "6 months": 6,
-          "12 months": 12,
-          "24 months +": 24
-        }[userProof] || 0;
-        
+        const userMonths = { "No": 0, "6 months": 6, "12 months": 12, "24 months +": 24 }[userProof] || 0;
         const req = lenderRequirement.toString().toLowerCase();
         let requiredMonths = 0;
-        
-        if (req.includes("24") || req.includes("2 year") || req.includes("24 month")) {
-          requiredMonths = 24;
-        } else if (req.includes("12") || req.includes("1 year") || req.includes("12 month")) {
-          requiredMonths = 12;
-        } else if (req.includes("6") || req.includes("6 month")) {
-          requiredMonths = 6;
-        } else if (req === "yes" || req === "required") {
-          requiredMonths = 6;
-        }
-        
+        if (req.includes("24") || req.includes("2 year")) requiredMonths = 24;
+        else if (req.includes("12") || req.includes("1 year")) requiredMonths = 12;
+        else if (req.includes("6")) requiredMonths = 6;
+        else if (req === "yes" || req === "required") requiredMonths = 6;
         return userMonths >= requiredMonths;
       }
 
@@ -168,6 +155,19 @@
           let score = 60;
           let reasons = [];
           let isExcluded = false;
+
+          // --- DEPOSIT HARDSTOP LOGIC ---
+          if (formData.isAssetBacked === "No") {
+            const reqString = l.If_Non_Asset_Backed || "";
+            const minRequiredDeposit = parseDepositRequirement(reqString);
+            const userDeposit = parseFloat(formData.depositPercent) || 0;
+
+            if (reqString.toLowerCase().includes("doesn't qualify")) {
+              isExcluded = true;
+            } else if (userDeposit < minRequiredDeposit) {
+              isExcluded = true;
+            }
+          }
 
           if (!meetsEntityRequirement(formData.entityType, l)) isExcluded = true;
 
@@ -183,55 +183,23 @@
             if (assetAge > parseInt(l.Age_Asset_Limit)) isExcluded = true;
           }
 
-          // HARD STOP: Asset age at end of loan term
           if (l.Max_Asset_Age_End_of_Term) {
             const currentAssetAge = formData.assetAge === "15+" ? 16 : parseInt(formData.assetAge);
             const loanTermYears = parseInt(formData.loanTerm) / 12;
-            const assetAgeAtEndOfTerm = currentAssetAge + loanTermYears;
-            
-            if (assetAgeAtEndOfTerm > parseInt(l.Max_Asset_Age_End_of_Term)) {
-              isExcluded = true;
-            }
+            if ((currentAssetAge + loanTermYears) > parseInt(l.Max_Asset_Age_End_of_Term)) isExcluded = true;
           }
 
           if (l.Requires_GST_Registration === "Yes" && formData.gstRegistered !== "Yes") isExcluded = true;
-
           if (l.Min_ABN_Age_Months && parseABNMonths(formData.abnAge) < parseInt(l.Min_ABN_Age_Months)) isExcluded = true;
-
-          if (l.Min_GST_Age_Months && formData.gstRegistered === "Yes") {
-            if (parseABNMonths(formData.abnAge) < parseInt(l.Min_GST_Age_Months)) isExcluded = true;
-          }
-
           const balloonPct = parseFloat(formData.balloonPercent);
           if (l.Balloon_Max && balloonPct > parseFloat(l.Balloon_Max)) isExcluded = true;
 
-          if (!meetsResidentialRequirement(formData.residentialProof, l.Residential_Required)) {
-            isExcluded = true;
-          }
+          if (!meetsResidentialRequirement(formData.residentialProof, l.Residential_Required)) isExcluded = true;
+          if (l.Need_Bank_Statements === "Yes" && formData.provideBankStatements !== "Yes") isExcluded = true;
 
-          if (l.Need_Bank_Statements === "Yes" && formData.provideBankStatements !== "Yes") {
-            isExcluded = true;
-          }
-
-          if (formData.isAssetBacked === "Yes") {
-            score += 10;
-            reasons.push("Asset-backed");
-          }
-
-          if (l.Requires_GST_Registration === "No") {
-            score += 5;
-            reasons.push("No GST required");
-          }
-
-          if (l.Accepts_Poor_Credit === "Yes" && parseInt(formData.creditScore) < 650) {
-            score += 15;
-            reasons.push("Credit flexible");
-          }
-
-          if (parseInt(formData.creditScore) >= 700) {
-            score += 10;
-            reasons.push("Strong credit");
-          }
+          // Scoring
+          if (formData.isAssetBacked === "Yes") { score += 10; reasons.push("Asset-backed"); }
+          if (parseInt(formData.creditScore) >= 700) { score += 10; reasons.push("Strong credit"); }
 
           return { ...l, finalScore: Math.min(score, 100), reasons, isExcluded };
         })
@@ -249,45 +217,29 @@
             <div className="text-center mb-8">
               <h1 className="text-4xl font-bold text-red-600 mb-2">Beaver Match Pro</h1>
               <p className="text-gray-600">Lender Decision Engine</p>
-              {loading && <p className="text-sm text-gray-500 mt-2">Loading lenders...</p>}
-              {!loading && !error && <p className="text-sm text-gray-500 mt-2">{lenders.length} lenders available</p>}
-              {error && (
-                <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4">
-                  <p className="text-red-800 font-medium">Error loading lenders</p>
-                  <p className="text-red-700 text-sm mt-1">{error}</p>
-                  <button 
-                    onClick={loadSheets}
-                    className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
-                  >
-                    Try again
-                  </button>
-                </div>
-              )}
             </div>
 
             <div className="bg-white rounded-lg shadow-md p-6 mb-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Loan Amount ($)</label>
-                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter loan amount" value={formData.loanAmount} onChange={e => update("loanAmount", e.target.value)} />
+                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500" value={formData.loanAmount} onChange={e => update("loanAmount", e.target.value)} />
                 </div>
 
+                {/* NEW DEPOSIT INPUT */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Applicant Age</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.lendeeAge} onChange={e => update("lendeeAge", e.target.value)}>
-                    <option value="18-25">18-25</option>
-                    <option value="25+">25+</option>
-                  </select>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Deposit Paid (%)</label>
+                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500" placeholder="e.g. 20" value={formData.depositPercent} onChange={e => update("depositPercent", e.target.value)} />
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Credit Score</label>
-                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter credit score" value={formData.creditScore} onChange={e => update("creditScore", e.target.value)} />
+                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500" value={formData.creditScore} onChange={e => update("creditScore", e.target.value)} />
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Entity Type</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.entityType} onChange={e => update("entityType", e.target.value)}>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500" value={formData.entityType} onChange={e => update("entityType", e.target.value)}>
                     <option value="PtyLtd">Pty Ltd</option>
                     <option value="SoleTrader">Sole Trader</option>
                     <option value="Trust">Trust</option>
@@ -296,7 +248,7 @@
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">ABN Age</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.abnAge} onChange={e => update("abnAge", e.target.value)}>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500" value={formData.abnAge} onChange={e => update("abnAge", e.target.value)}>
                     <option value="N/A - 3 months">N/A - 3 months</option>
                     <option value="3-6">3-6 months</option>
                     <option value="6-12">6-12 months</option>
@@ -307,102 +259,26 @@
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">GST Registered?</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.gstRegistered} onChange={e => update("gstRegistered", e.target.value)}>
-                    <option value="Yes">Yes</option>
-                    <option value="No">No</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Asset Type</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.assetType} onChange={e => update("assetType", e.target.value)}>
-                    <option value="Asset_Car">Car / Van</option>
-                    <option value="Asset_Truck">Truck / Heavy Vehicle</option>
-                    <option value="Asset_Equipment">Equipment</option>
-                  </select>
-                </div>
-
-                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Asset Age</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.assetAge} onChange={e => update("assetAge", e.target.value)}>
-                    <option value="0">New (0 years)</option>
-                    <option value="1">1 year</option>
-                    <option value="2">2 years</option>
-                    <option value="3">3 years</option>
-                    <option value="4">4 years</option>
-                    <option value="5">5 years</option>
-                    <option value="6">6 years</option>
-                    <option value="7">7 years</option>
-                    <option value="8">8 years</option>
-                    <option value="9">9 years</option>
-                    <option value="10">10 years</option>
-                    <option value="11">11 years</option>
-                    <option value="12">12 years</option>
-                    <option value="13">13 years</option>
-                    <option value="14">14 years</option>
-                    <option value="15">15 years</option>
+                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500" value={formData.assetAge} onChange={e => update("assetAge", e.target.value)}>
+                    {[...Array(16).keys()].map(i => <option key={i} value={i}>{i} year{i!==1?'s':''}</option>)}
                     <option value="15+">15+ years</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Loan Term</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.loanTerm} onChange={e => update("loanTerm", e.target.value)}>
-                    <option value="12">12 months (1 year)</option>
-                    <option value="24">24 months (2 years)</option>
-                    <option value="36">36 months (3 years)</option>
-                    <option value="48">48 months (4 years)</option>
-                    <option value="60">60 months (5 years)</option>
-                    <option value="72">72 months (6 years)</option>
-                    <option value="84">84 months (7 years)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Balloon Payment %</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.balloonPercent} onChange={e => update("balloonPercent", e.target.value)}>
-                    <option value="0">0%</option>
-                    <option value="5">5%</option>
-                    <option value="10">10%</option>
-                    <option value="15">15%</option>
-                    <option value="20">20%</option>
-                    <option value="25">25%</option>
-                    <option value="30">30%</option>
-                    <option value="35">35%</option>
-                    <option value="40">40%</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Residential Proof</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.residentialProof} onChange={e => update("residentialProof", e.target.value)}>
-                    <option value="No">No</option>
-                    <option value="6 months">6 months</option>
-                    <option value="12 months">12 months</option>
-                    <option value="24 months +">24 months +</option>
                   </select>
                 </div>
 
                 <div className="md:col-span-2 flex flex-wrap gap-6 pt-2">
                   <label className="flex items-center space-x-2">
-                    <input type="checkbox" className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.isHomeOwner === "Yes"} onChange={e => update("isHomeOwner", e.target.checked ? "Yes" : "No")} />
+                    <input type="checkbox" className="w-4 h-4 text-red-600" checked={formData.isHomeOwner === "Yes"} onChange={e => update("isHomeOwner", e.target.checked ? "Yes" : "No")} />
                     <span className="text-sm font-medium text-gray-700">Home Owner</span>
                   </label>
-
                   <label className="flex items-center space-x-2">
-                    <input type="checkbox" className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.isAssetBacked === "Yes"} onChange={e => update("isAssetBacked", e.target.checked ? "Yes" : "No")} />
+                    <input type="checkbox" className="w-4 h-4 text-red-600" checked={formData.isAssetBacked === "Yes"} onChange={e => update("isAssetBacked", e.target.checked ? "Yes" : "No")} />
                     <span className="text-sm font-medium text-gray-700">Asset Backed</span>
-                  </label>
-
-                  <label className="flex items-center space-x-2">
-                    <input type="checkbox" className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.provideBankStatements === "Yes"} onChange={e => update("provideBankStatements", e.target.checked ? "Yes" : "No")} />
-                    <span className="text-sm font-medium text-gray-700">Can Provide Bank Statements</span>
                   </label>
                 </div>
 
                 <div className="md:col-span-2">
-                  <button onClick={calculateMatch} disabled={lenders.length === 0} className="w-full bg-red-600 text-white py-3 px-6 rounded-md font-semibold hover:bg-red-700 transition-colors duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                  <button onClick={calculateMatch} className="w-full bg-red-600 text-white py-3 px-6 rounded-md font-semibold hover:bg-red-700">
                     Find Matching Lenders
                   </button>
                 </div>
@@ -412,58 +288,19 @@
             {results && (
               <div className="space-y-4">
                 <h2 className="text-2xl font-bold text-gray-900 mb-4">Matching Lenders ({results.length})</h2>
-                {results.length === 0 && (
-                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
-                    <p className="text-yellow-800 font-medium">No matching lenders found.</p>
-                    <p className="text-yellow-700 text-sm mt-2">Try adjusting your criteria: loan amount, credit score, asset age, balloon %, residential proof, or bank statement requirements.</p>
-                  </div>
-                )}
                 {results.map((lender, idx) => (
                   <div key={idx} className="bg-white rounded-lg shadow-md p-6 border-l-4 border-red-600">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="text-xl font-bold text-gray-900">{lender.Lender_Name}</h3>
-                        <p className="text-sm text-gray-600 mt-1">Match Score: {lender.finalScore}%</p>
-                      </div>
-                      <div>
-                        <span className={`px-3 py-1 rounded-full text-sm font-semibold ${lender.finalScore >= 80 ? 'bg-green-100 text-green-800' : lender.finalScore >= 70 ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                          {lender.finalScore >= 80 ? 'Excellent' : lender.finalScore >= 70 ? 'Good' : 'Fair'}
-                        </span>
-                      </div>
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="text-xl font-bold text-gray-900">{lender.Lender_Name}</h3>
+                      <span className="text-xs font-bold text-gray-400">Score: {lender.finalScore}%</span>
                     </div>
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                    <p className="text-sm text-gray-600 italic mb-2">Non-Asset Requirement: {lender.If_Non_Asset_Backed || "N/A"}</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div>
                         <p className="text-xs text-gray-500">Loan Range</p>
-                        <p className="text-sm font-semibold text-gray-900">${lender.Min_Loan_Amount || '0'} - ${lender.Max_Loan_Amount || 'No Max'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Max Term</p>
-                        <p className="text-sm font-semibold text-gray-900">{lender.Loan_Length || '60'} months</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Max Balloon</p>
-                        <p className="text-sm font-semibold text-gray-900">{lender.Balloon_Max || '0'}%</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Doc Type</p>
-                        <p className="text-sm font-semibold text-gray-900">{lender.Need_Bank_Statements === "Yes" ? "Full Doc" : "Low Doc"}</p>
+                        <p className="text-sm font-semibold">${lender.Min_Loan_Amount || '0'} - ${lender.Max_Loan_Amount || 'No Max'}</p>
                       </div>
                     </div>
-
-                    {lender.Special_Notes && (
-                      <div className="bg-gray-50 rounded p-3 mb-4">
-                        <p className="text-sm text-gray-700"><span className="font-semibold">Notes:</span> {lender.Special_Notes}</p>
-                      </div>
-                    )}
-
-                    {lender.reasons.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {lender.reasons.map((reason, i) => (
-                          <span key={i} className="bg-red-50 text-red-700 px-3 py-1 rounded-full text-xs font-medium">✓ {reason}</span>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
