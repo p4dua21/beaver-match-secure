@@ -30,7 +30,8 @@
         residentialProof: "No",
         isHomeOwner: "No",
         isAssetBacked: "No",
-        provideBankStatements: "Yes"
+        provideBankStatements: "Yes",
+        depositPercent: "0" // NEW: Added deposit percentage field
       });
 
       const [lenders, setLenders] = useState([]);
@@ -86,6 +87,53 @@
         setLoading(false);
       }
 
+      // NEW: Function to parse deposit requirement from If_Non_Asset_Backed column
+      function parseDepositRequirement(requirementText) {
+        if (!requirementText) return { minDepositPercent: 0, disqualified: false, note: "" };
+        
+        const text = requirementText.toString().toLowerCase();
+        
+        // Check for "Doesn't qualify" first
+        if (text.includes("doesn't qualify") || text.includes("doesnt qualify") || text.includes("no finance")) {
+          return { minDepositPercent: null, disqualified: true, note: "Doesn't qualify for non-asset backed" };
+        }
+        
+        // Check for "Tier C only"
+        if (text.includes("tier c only")) {
+          return { minDepositPercent: 0, disqualified: false, note: "Tier C only (special requirement)" };
+        }
+        
+        // Check for "10% Deposit + 100K limit"
+        if (text.includes("100k limit") || text.includes("100k")) {
+          return { minDepositPercent: 10, disqualified: false, note: "Max loan amount: 100K" };
+        }
+        
+        // Check for "10% MV / 20% other"
+        if (text.includes("mv") && text.includes("other")) {
+          const mvMatch = text.match(/(\d+)%\s*mv/i);
+          const otherMatch = text.match(/(\d+)%\s*other/i);
+          return { 
+            minDepositPercent: 20, // Use the higher requirement
+            disqualified: false, 
+            note: "10% for market value vehicles, 20% for others" 
+          };
+        }
+        
+        // Extract percentage using regex (looks for numbers followed by %)
+        const percentageMatch = text.match(/(\d+)%/);
+        if (percentageMatch) {
+          const depositPercent = parseInt(percentageMatch[1]);
+          return { 
+            minDepositPercent: depositPercent, 
+            disqualified: false, 
+            note: `${depositPercent}% deposit required for non-asset backed` 
+          };
+        }
+        
+        // Default: no deposit requirement
+        return { minDepositPercent: 0, disqualified: false, note: "" };
+      }
+
       function meetsMinCreditScore(userScore, lenderRequirement) {
         if (!lenderRequirement) return true;
         const score = parseInt(userScore);
@@ -102,10 +150,8 @@
       function meetsAgeRestriction(userAge, restriction) {
         if (!restriction || restriction === "None") return true;
         
-        // Parse user age selection
         const userIs25Plus = userAge === "25+";
         
-        // Check if lender requires 25+
         if (restriction.includes("25")) {
           return userIs25Plus;
         }
@@ -168,6 +214,7 @@
           let score = 60;
           let reasons = [];
           let isExcluded = false;
+          let depositNote = "";
 
           if (!meetsEntityRequirement(formData.entityType, l)) isExcluded = true;
 
@@ -213,6 +260,30 @@
             isExcluded = true;
           }
 
+          // NEW: Deposit requirement check (HARD STOP)
+          if (l.If_Non_Asset_Backed) {
+            const depositRequirement = parseDepositRequirement(l.If_Non_Asset_Backed);
+            
+            // If it's a non-asset backed application
+            if (formData.isAssetBacked === "No") {
+              // Check if lender disqualifies non-asset backed
+              if (depositRequirement.disqualified) {
+                isExcluded = true;
+                depositNote = "Doesn't qualify for non-asset backed";
+              }
+              // Check deposit percentage
+              else if (depositRequirement.minDepositPercent !== null) {
+                const userDeposit = parseFloat(formData.depositPercent) || 0;
+                if (userDeposit < depositRequirement.minDepositPercent) {
+                  isExcluded = true;
+                  depositNote = `Requires ${depositRequirement.minDepositPercent}% deposit for non-asset backed`;
+                } else if (depositRequirement.note) {
+                  depositNote = depositRequirement.note;
+                }
+              }
+            }
+          }
+
           if (formData.isAssetBacked === "Yes") {
             score += 10;
             reasons.push("Asset-backed");
@@ -233,7 +304,12 @@
             reasons.push("Strong credit");
           }
 
-          return { ...l, finalScore: Math.min(score, 100), reasons, isExcluded };
+          // Add deposit note to reasons if it exists
+          if (depositNote && !isExcluded) {
+            reasons.push(depositNote);
+          }
+
+          return { ...l, finalScore: Math.min(score, 100), reasons, isExcluded, depositNote };
         })
         .filter(l => !l.isExcluded)
         .sort((a, b) => b.finalScore - a.finalScore);
@@ -270,6 +346,34 @@
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Loan Amount ($)</label>
                   <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter loan amount" value={formData.loanAmount} onChange={e => update("loanAmount", e.target.value)} />
+                </div>
+
+                {/* NEW: Deposit Percentage Input */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Deposit on Asset (%)
+                    <span className="text-xs text-gray-500 ml-1">(for non-asset backed)</span>
+                  </label>
+                  <div className="relative">
+                    <input 
+                      type="number" 
+                      min="0" 
+                      max="100" 
+                      step="0.1"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" 
+                      placeholder="Enter deposit percentage" 
+                      value={formData.depositPercent} 
+                      onChange={e => update("depositPercent", e.target.value)} 
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <span className="text-gray-500">%</span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {formData.isAssetBacked === "Yes" 
+                      ? "Deposit requirement may be waived for asset-backed applications"
+                      : "Required for non-asset backed applications"}
+                  </p>
                 </div>
 
                 <div>
@@ -415,7 +519,12 @@
                 {results.length === 0 && (
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
                     <p className="text-yellow-800 font-medium">No matching lenders found.</p>
-                    <p className="text-yellow-700 text-sm mt-2">Try adjusting your criteria: loan amount, credit score, asset age, balloon %, residential proof, or bank statement requirements.</p>
+                    <p className="text-yellow-700 text-sm mt-2">Try adjusting your criteria: loan amount, credit score, asset age, balloon %, deposit amount, residential proof, or bank statement requirements.</p>
+                    {formData.isAssetBacked === "No" && formData.depositPercent < 20 && (
+                      <p className="text-yellow-700 text-sm mt-2 font-medium">
+                        💡 Try increasing your deposit percentage. Many lenders require 20%+ for non-asset backed applications.
+                      </p>
+                    )}
                   </div>
                 )}
                 {results.map((lender, idx) => (
@@ -450,6 +559,24 @@
                         <p className="text-sm font-semibold text-gray-900">{lender.Need_Bank_Statements === "Yes" ? "Full Doc" : "Low Doc"}</p>
                       </div>
                     </div>
+
+                    {/* NEW: Display deposit requirement if applicable */}
+                    {lender.If_Non_Asset_Backed && (
+                      <div className="mb-3 p-3 bg-blue-50 rounded border border-blue-100">
+                        <p className="text-sm text-blue-800 font-medium">
+                          <i className="fas fa-info-circle mr-2"></i>
+                          Non-Asset Backed Requirement: {lender.If_Non_Asset_Backed}
+                        </p>
+                        {lender.depositNote && (
+                          <p className="text-sm text-blue-700 mt-1">
+                            <i className="fas fa-check-circle mr-2"></i>
+                            {formData.isAssetBacked === "No" 
+                              ? `✓ Deposit satisfied: ${formData.depositPercent}% meets requirement`
+                              : lender.depositNote}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {lender.Special_Notes && (
                       <div className="bg-gray-50 rounded p-3 mb-4">
