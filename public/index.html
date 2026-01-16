@@ -3,14 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Beaver Match Pro v2 | Lender Decision Engine</title>
+  <title>Beaver Match Pro | AI Lender Matching Engine</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .glass-card { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.9); }
+    .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .shadow-soft { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08); }
+    .shadow-deep { box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15); }
+  </style>
 </head>
-<body class="bg-gray-50 text-gray-900 font-sans">
+<body class="bg-gradient-to-br from-gray-50 to-gray-100 text-gray-800 min-h-screen">
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useEffect } = React;
@@ -19,7 +27,11 @@
       const [formData, setFormData] = useState({
         loanAmount: "",
         lendeeAge: "25+",
-        creditScore: "",
+        // REMOVED: Old creditScore field
+        // NEW: Credit score fields
+        creditScoreType: "N/A",
+        creditScoreComprehensive: "",
+        creditScoreVeda: "",
         entityType: "PtyLtd",
         abnAge: "N/A - 3 months",
         gstRegistered: "Yes",
@@ -31,7 +43,7 @@
         isHomeOwner: "No",
         isAssetBacked: "No",
         provideBankStatements: "Yes",
-        depositPercent: "0" // NEW: Added deposit percentage field
+        depositPercent: "0"
       });
 
       const [lenders, setLenders] = useState([]);
@@ -87,39 +99,33 @@
         setLoading(false);
       }
 
-      // NEW: Function to parse deposit requirement from If_Non_Asset_Backed column
       function parseDepositRequirement(requirementText) {
         if (!requirementText) return { minDepositPercent: 0, disqualified: false, note: "" };
         
         const text = requirementText.toString().toLowerCase();
         
-        // Check for "Doesn't qualify" first
         if (text.includes("doesn't qualify") || text.includes("doesnt qualify") || text.includes("no finance")) {
           return { minDepositPercent: null, disqualified: true, note: "Doesn't qualify for non-asset backed" };
         }
         
-        // Check for "Tier C only"
         if (text.includes("tier c only")) {
           return { minDepositPercent: 0, disqualified: false, note: "Tier C only (special requirement)" };
         }
         
-        // Check for "10% Deposit + 100K limit"
         if (text.includes("100k limit") || text.includes("100k")) {
           return { minDepositPercent: 10, disqualified: false, note: "Max loan amount: 100K" };
         }
         
-        // Check for "10% MV / 20% other"
         if (text.includes("mv") && text.includes("other")) {
           const mvMatch = text.match(/(\d+)%\s*mv/i);
           const otherMatch = text.match(/(\d+)%\s*other/i);
           return { 
-            minDepositPercent: 20, // Use the higher requirement
+            minDepositPercent: 20,
             disqualified: false, 
             note: "10% for market value vehicles, 20% for others" 
           };
         }
         
-        // Extract percentage using regex (looks for numbers followed by %)
         const percentageMatch = text.match(/(\d+)%/);
         if (percentageMatch) {
           const depositPercent = parseInt(percentageMatch[1]);
@@ -130,21 +136,39 @@
           };
         }
         
-        // Default: no deposit requirement
         return { minDepositPercent: 0, disqualified: false, note: "" };
       }
 
-      function meetsMinCreditScore(userScore, lenderRequirement) {
-        if (!lenderRequirement) return true;
-        const score = parseInt(userScore);
-        const req = lenderRequirement.toLowerCase();
-        if (!isNaN(parseInt(lenderRequirement))) {
-          return score >= parseInt(lenderRequirement);
+      // NEW: Parse credit score requirement from lender
+      function parseCreditScoreRequirement(requirementText) {
+        if (!requirementText) return null;
+        
+        const text = requirementText.toString().toLowerCase();
+        
+        // Check for numeric requirement
+        if (!isNaN(parseInt(requirementText))) {
+          return parseInt(requirementText);
         }
-        if (req.includes("good") || req === "satisfactory") return score >= 650;
-        if (req.includes("solid")) return score >= 600;
-        if (req.includes("ccr tiers")) return score >= 500;
-        return true;
+        
+        // Check for descriptive requirements
+        if (text.includes("good") || text.includes("satisfactory")) return 650;
+        if (text.includes("solid")) return 600;
+        if (text.includes("ccr tiers") || text.includes("tier")) return 500;
+        
+        return null; // No specific requirement
+      }
+
+      // NEW: Check if credit score meets lender requirement
+      function meetsCreditRequirement(userScore, lenderRequirement) {
+        if (!lenderRequirement) return true; // No requirement = passes
+        
+        const requirement = parseCreditScoreRequirement(lenderRequirement);
+        if (requirement === null) return true; // Couldn't parse = passes
+        
+        const userScoreNum = parseInt(userScore);
+        if (isNaN(userScoreNum)) return false; // No valid user score
+        
+        return userScoreNum >= requirement;
       }
 
       function meetsAgeRestriction(userAge, restriction) {
@@ -204,6 +228,66 @@
         return userMonths >= requiredMonths;
       }
 
+      // FIXED: Calculate total brokerage fee = (loan amount × percentage) + flat fee
+      function calculateTotalBrokerageFee(lender, loanAmount) {
+        if (!loanAmount) return 0;
+        
+        const loanAmt = parseFloat(loanAmount);
+        const maxPercent = parseFloat(lender.Max_Brokerage_Percent) || 0;
+        const maxFee = parseFloat(lender.Max_Brokerage_Fee) || 0;
+        
+        // Calculate percentage-based fee
+        const percentFee = loanAmt * (maxPercent / 100);
+        
+        // FIXED: Add percentage fee + flat fee (not capped, they're separate)
+        const totalFee = percentFee + maxFee;
+        
+        return totalFee;
+      }
+
+      // Calculate lender quality score (1-100) based on multiple factors
+      function calculateLenderQualityScore(lender, loanAmount) {
+        let score = 0;
+        const factors = [];
+        
+        // 1. Lender Ranking (boss ranking) - Higher ranking = better
+        // Assuming ranking is 1-10 where 10 is best
+        const ranking = parseFloat(lender.Lender_Ranking) || 5;
+        const rankingScore = (ranking / 10) * 40; // 40 points max for ranking
+        score += rankingScore;
+        factors.push({ name: "Boss Ranking", score: rankingScore, max: 40, value: `${ranking}/10` });
+        
+        // 2. Standard Rate - Lower rate = better
+        const standardRate = parseFloat(lender.Standard_Rate) || 0;
+        let rateScore = 0;
+        if (standardRate > 0) {
+          // Lower rate gets higher score (inverse relationship)
+          // Assuming rates typically 5-15%, lower is better
+          rateScore = Math.max(0, 30 - (standardRate * 2)); // 30 points max for rate
+          rateScore = Math.min(30, rateScore);
+        }
+        score += rateScore;
+        factors.push({ name: "Interest Rate", score: rateScore, max: 30, value: `${standardRate}%` });
+        
+        // 3. Total Brokerage Fee - Higher fee = better for us
+        const totalFee = calculateTotalBrokerageFee(lender, loanAmount);
+        let feeScore = 0;
+        if (totalFee > 0) {
+          // Normalize fee score based on loan amount
+          const feePercentage = (totalFee / parseFloat(loanAmount)) * 100;
+          feeScore = Math.min(30, feePercentage * 3); // 30 points max for fee
+        }
+        score += feeScore;
+        factors.push({ 
+          name: "Brokerage Fee", 
+          score: feeScore, 
+          max: 30, 
+          value: `$${totalFee.toLocaleString()} (${lender.Max_Brokerage_Percent || 0}% + $${lender.Max_Brokerage_Fee || 0} flat)` 
+        });
+        
+        return { score: Math.min(100, Math.max(0, score)), factors };
+      }
+
       function calculateMatch() {
         if (!formData.loanAmount) {
           alert("Please enter a loan amount");
@@ -211,8 +295,6 @@
         }
 
         const scored = lenders.map(l => {
-          let score = 60;
-          let reasons = [];
           let isExcluded = false;
           let depositNote = "";
 
@@ -223,14 +305,49 @@
           if (l.Max_Loan_Amount && loanAmt > parseFloat(l.Max_Loan_Amount)) isExcluded = true;
 
           if (!meetsAgeRestriction(formData.lendeeAge, l.Age_Restrictions)) isExcluded = true;
-          if (!meetsMinCreditScore(formData.creditScore, l.Equifax_Credit_Score)) isExcluded = true;
+
+          // NEW: Credit score checks based on type
+          if (formData.creditScoreType !== "N/A") {
+            let meetsEquifaxRequirement = true;
+            let meetsVedaRequirement = true;
+            
+            // Check Equifax requirement if lender has it and user has provided it
+            if (l.Equifax_Credit_Score && 
+                (formData.creditScoreType === "Comprehensive" || formData.creditScoreType === "Both")) {
+              if (formData.creditScoreComprehensive) {
+                meetsEquifaxRequirement = meetsCreditRequirement(formData.creditScoreComprehensive, l.Equifax_Credit_Score);
+              } else {
+                meetsEquifaxRequirement = false; // Lender requires it, user selected it but didn't provide score
+              }
+            }
+            
+            // Check Veda requirement if lender has it and user has provided it
+            if (l.Veda_Credit_Score && 
+                (formData.creditScoreType === "Veda" || formData.creditScoreType === "Both")) {
+              if (formData.creditScoreVeda) {
+                meetsVedaRequirement = meetsCreditRequirement(formData.creditScoreVeda, l.Veda_Credit_Score);
+              } else {
+                meetsVedaRequirement = false; // Lender requires it, user selected it but didn't provide score
+              }
+            }
+            
+            // If lender has requirements and user doesn't meet them, exclude
+            if ((l.Equifax_Credit_Score && !meetsEquifaxRequirement) || 
+                (l.Veda_Credit_Score && !meetsVedaRequirement)) {
+              isExcluded = true;
+            }
+          } else {
+            // User selected N/A - if lender requires any credit score, exclude
+            if (l.Equifax_Credit_Score || l.Veda_Credit_Score) {
+              isExcluded = true;
+            }
+          }
 
           if (l.Age_Asset_Limit) {
             const assetAge = formData.assetAge === "15+" ? 16 : parseInt(formData.assetAge);
             if (assetAge > parseInt(l.Age_Asset_Limit)) isExcluded = true;
           }
 
-          // HARD STOP: Asset age at end of loan term
           if (l.Max_Asset_Age_End_of_Term) {
             const currentAssetAge = formData.assetAge === "15+" ? 16 : parseInt(formData.assetAge);
             const loanTermYears = parseInt(formData.loanTerm) / 12;
@@ -241,6 +358,7 @@
             }
           }
 
+          // HARD STOP: GST Registration (NO SCORING - HARD STOP ONLY)
           if (l.Requires_GST_Registration === "Yes" && formData.gstRegistered !== "Yes") isExcluded = true;
 
           if (l.Min_ABN_Age_Months && parseABNMonths(formData.abnAge) < parseInt(l.Min_ABN_Age_Months)) isExcluded = true;
@@ -260,18 +378,15 @@
             isExcluded = true;
           }
 
-          // NEW: Deposit requirement check (HARD STOP)
+          // HARD STOP: Deposit requirement for non-asset backed
           if (l.If_Non_Asset_Backed) {
             const depositRequirement = parseDepositRequirement(l.If_Non_Asset_Backed);
             
-            // If it's a non-asset backed application
             if (formData.isAssetBacked === "No") {
-              // Check if lender disqualifies non-asset backed
               if (depositRequirement.disqualified) {
                 isExcluded = true;
                 depositNote = "Doesn't qualify for non-asset backed";
               }
-              // Check deposit percentage
               else if (depositRequirement.minDepositPercent !== null) {
                 const userDeposit = parseFloat(formData.depositPercent) || 0;
                 if (userDeposit < depositRequirement.minDepositPercent) {
@@ -284,35 +399,25 @@
             }
           }
 
-          if (formData.isAssetBacked === "Yes") {
-            score += 10;
-            reasons.push("Asset-backed");
+          // Calculate lender quality score if not excluded
+          let lenderQuality = null;
+          if (!isExcluded) {
+            lenderQuality = calculateLenderQualityScore(l, formData.loanAmount);
           }
 
-          if (l.Requires_GST_Registration === "No") {
-            score += 5;
-            reasons.push("No GST required");
-          }
-
-          if (l.Accepts_Poor_Credit === "Yes" && parseInt(formData.creditScore) < 650) {
-            score += 15;
-            reasons.push("Credit flexible");
-          }
-
-          if (parseInt(formData.creditScore) >= 700) {
-            score += 10;
-            reasons.push("Strong credit");
-          }
-
-          // Add deposit note to reasons if it exists
-          if (depositNote && !isExcluded) {
-            reasons.push(depositNote);
-          }
-
-          return { ...l, finalScore: Math.min(score, 100), reasons, isExcluded, depositNote };
+          return { 
+            ...l, 
+            isExcluded, 
+            depositNote,
+            lenderQuality,
+            totalBrokerageFee: !isExcluded ? calculateTotalBrokerageFee(l, formData.loanAmount) : 0
+          };
         })
         .filter(l => !l.isExcluded)
-        .sort((a, b) => b.finalScore - a.finalScore);
+        .sort((a, b) => {
+          // Sort by lender quality score (descending)
+          return (b.lenderQuality?.score || 0) - (a.lenderQuality?.score || 0);
+        });
 
         setResults(scored);
       }
@@ -320,281 +425,1008 @@
       const update = (f, v) => setFormData(p => ({ ...p, [f]: v }));
 
       return (
-        <div className="min-h-screen bg-gray-50 py-8 px-4">
-          <div className="max-w-4xl mx-auto">
-            <div className="text-center mb-8">
-              <h1 className="text-4xl font-bold text-red-600 mb-2">Beaver Match Pro</h1>
-              <p className="text-gray-600">Lender Decision Engine</p>
-              {loading && <p className="text-sm text-gray-500 mt-2">Loading lenders...</p>}
-              {!loading && !error && <p className="text-sm text-gray-500 mt-2">{lenders.length} lenders available</p>}
-              {error && (
-                <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4">
-                  <p className="text-red-800 font-medium">Error loading lenders</p>
-                  <p className="text-red-700 text-sm mt-1">{error}</p>
+        <div className="min-h-screen">
+          {/* Header */}
+          <header className="gradient-bg text-white shadow-deep">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+              <div className="flex flex-col md:flex-row justify-between items-center">
+                <div className="flex items-center space-x-4 mb-4 md:mb-0">
+                  <div className="bg-white p-3 rounded-xl shadow-soft">
+                    <i className="fas fa-piggy-bank text-2xl text-purple-600"></i>
+                  </div>
+                  <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Beaver Match Pro</h1>
+                    <p className="text-blue-100 font-medium">AI-Powered Lender Matching Engine</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center space-x-4">
+                  <div className="text-center bg-white/10 p-3 rounded-lg backdrop-blur-sm">
+                    <div className="text-sm text-blue-100">Available Lenders</div>
+                    <div className="text-2xl font-bold">{lenders.length}</div>
+                  </div>
                   <button 
                     onClick={loadSheets}
-                    className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
+                    className="bg-white text-purple-700 px-4 py-2 rounded-lg font-semibold hover:bg-gray-100 transition-all flex items-center"
                   >
-                    Try again
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Loan Amount ($)</label>
-                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter loan amount" value={formData.loanAmount} onChange={e => update("loanAmount", e.target.value)} />
-                </div>
-
-                {/* NEW: Deposit Percentage Input */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Deposit on Asset (%)
-                    <span className="text-xs text-gray-500 ml-1">(for non-asset backed)</span>
-                  </label>
-                  <div className="relative">
-                    <input 
-                      type="number" 
-                      min="0" 
-                      max="100" 
-                      step="0.1"
-                      className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" 
-                      placeholder="Enter deposit percentage" 
-                      value={formData.depositPercent} 
-                      onChange={e => update("depositPercent", e.target.value)} 
-                    />
-                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                      <span className="text-gray-500">%</span>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {formData.isAssetBacked === "Yes" 
-                      ? "Deposit requirement may be waived for asset-backed applications"
-                      : "Required for non-asset backed applications"}
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Applicant Age</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.lendeeAge} onChange={e => update("lendeeAge", e.target.value)}>
-                    <option value="18-25">18-25</option>
-                    <option value="25+">25+</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Credit Score</label>
-                  <input type="number" className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" placeholder="Enter credit score" value={formData.creditScore} onChange={e => update("creditScore", e.target.value)} />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Entity Type</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.entityType} onChange={e => update("entityType", e.target.value)}>
-                    <option value="PtyLtd">Pty Ltd</option>
-                    <option value="SoleTrader">Sole Trader</option>
-                    <option value="Trust">Trust</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">ABN Age</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.abnAge} onChange={e => update("abnAge", e.target.value)}>
-                    <option value="N/A - 3 months">N/A - 3 months</option>
-                    <option value="3-6">3-6 months</option>
-                    <option value="6-12">6-12 months</option>
-                    <option value="1-2 year">1-2 years</option>
-                    <option value="2-3 year">2-3 years</option>
-                    <option value="3 + year">3+ years</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">GST Registered?</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.gstRegistered} onChange={e => update("gstRegistered", e.target.value)}>
-                    <option value="Yes">Yes</option>
-                    <option value="No">No</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Asset Type</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.assetType} onChange={e => update("assetType", e.target.value)}>
-                    <option value="Asset_Car">Car / Van</option>
-                    <option value="Asset_Truck">Truck / Heavy Vehicle</option>
-                    <option value="Asset_Equipment">Equipment</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Asset Age</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.assetAge} onChange={e => update("assetAge", e.target.value)}>
-                    <option value="0">New (0 years)</option>
-                    <option value="1">1 year</option>
-                    <option value="2">2 years</option>
-                    <option value="3">3 years</option>
-                    <option value="4">4 years</option>
-                    <option value="5">5 years</option>
-                    <option value="6">6 years</option>
-                    <option value="7">7 years</option>
-                    <option value="8">8 years</option>
-                    <option value="9">9 years</option>
-                    <option value="10">10 years</option>
-                    <option value="11">11 years</option>
-                    <option value="12">12 years</option>
-                    <option value="13">13 years</option>
-                    <option value="14">14 years</option>
-                    <option value="15">15 years</option>
-                    <option value="15+">15+ years</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Loan Term</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.loanTerm} onChange={e => update("loanTerm", e.target.value)}>
-                    <option value="12">12 months (1 year)</option>
-                    <option value="24">24 months (2 years)</option>
-                    <option value="36">36 months (3 years)</option>
-                    <option value="48">48 months (4 years)</option>
-                    <option value="60">60 months (5 years)</option>
-                    <option value="72">72 months (6 years)</option>
-                    <option value="84">84 months (7 years)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Balloon Payment %</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.balloonPercent} onChange={e => update("balloonPercent", e.target.value)}>
-                    <option value="0">0%</option>
-                    <option value="5">5%</option>
-                    <option value="10">10%</option>
-                    <option value="15">15%</option>
-                    <option value="20">20%</option>
-                    <option value="25">25%</option>
-                    <option value="30">30%</option>
-                    <option value="35">35%</option>
-                    <option value="40">40%</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Residential Proof</label>
-                  <select className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-red-500 focus:border-transparent" value={formData.residentialProof} onChange={e => update("residentialProof", e.target.value)}>
-                    <option value="No">No</option>
-                    <option value="6 months">6 months</option>
-                    <option value="12 months">12 months</option>
-                    <option value="24 months +">24 months +</option>
-                  </select>
-                </div>
-
-                <div className="md:col-span-2 flex flex-wrap gap-6 pt-2">
-                  <label className="flex items-center space-x-2">
-                    <input type="checkbox" className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.isHomeOwner === "Yes"} onChange={e => update("isHomeOwner", e.target.checked ? "Yes" : "No")} />
-                    <span className="text-sm font-medium text-gray-700">Home Owner</span>
-                  </label>
-
-                  <label className="flex items-center space-x-2">
-                    <input type="checkbox" className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.isAssetBacked === "Yes"} onChange={e => update("isAssetBacked", e.target.checked ? "Yes" : "No")} />
-                    <span className="text-sm font-medium text-gray-700">Asset Backed</span>
-                  </label>
-
-                  <label className="flex items-center space-x-2">
-                    <input type="checkbox" className="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500" checked={formData.provideBankStatements === "Yes"} onChange={e => update("provideBankStatements", e.target.checked ? "Yes" : "No")} />
-                    <span className="text-sm font-medium text-gray-700">Can Provide Bank Statements</span>
-                  </label>
-                </div>
-
-                <div className="md:col-span-2">
-                  <button onClick={calculateMatch} disabled={lenders.length === 0} className="w-full bg-red-600 text-white py-3 px-6 rounded-md font-semibold hover:bg-red-700 transition-colors duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed">
-                    Find Matching Lenders
+                    <i className="fas fa-sync-alt mr-2"></i>
+                    Refresh
                   </button>
                 </div>
               </div>
             </div>
+          </header>
 
-            {results && (
-              <div className="space-y-4">
-                <h2 className="text-2xl font-bold text-gray-900 mb-4">Matching Lenders ({results.length})</h2>
-                {results.length === 0 && (
-                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
-                    <p className="text-yellow-800 font-medium">No matching lenders found.</p>
-                    <p className="text-yellow-700 text-sm mt-2">Try adjusting your criteria: loan amount, credit score, asset age, balloon %, deposit amount, residential proof, or bank statement requirements.</p>
-                    {formData.isAssetBacked === "No" && formData.depositPercent < 20 && (
-                      <p className="text-yellow-700 text-sm mt-2 font-medium">
-                        💡 Try increasing your deposit percentage. Many lenders require 20%+ for non-asset backed applications.
-                      </p>
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {/* Stats Bar */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+              <div className="glass-card rounded-xl p-4 shadow-soft border border-gray-100">
+                <div className="flex items-center">
+                  <div className="bg-blue-100 p-3 rounded-lg mr-4">
+                    <i className="fas fa-search-dollar text-blue-600 text-xl"></i>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Loan Matching</p>
+                    <p className="text-xl font-bold text-gray-800">Instant Results</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="glass-card rounded-xl p-4 shadow-soft border border-gray-100">
+                <div className="flex items-center">
+                  <div className="bg-green-100 p-3 rounded-lg mr-4">
+                    <i className="fas fa-shield-check text-green-600 text-xl"></i>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Hard Stop Checks</p>
+                    <p className="text-xl font-bold text-gray-800">12 Parameters</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="glass-card rounded-xl p-4 shadow-soft border border-gray-100">
+                <div className="flex items-center">
+                  <div className="bg-purple-100 p-3 rounded-lg mr-4">
+                    <i className="fas fa-chart-line text-purple-600 text-xl"></i>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Brokerage Optimized</p>
+                    <p className="text-xl font-bold text-gray-800">Fee-First Matching</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="glass-card rounded-xl p-4 shadow-soft border border-gray-100">
+                <div className="flex items-center">
+                  <div className="bg-yellow-100 p-3 rounded-lg mr-4">
+                    <i className="fas fa-bolt text-yellow-600 text-xl"></i>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Processing Time</p>
+                    <p className="text-xl font-bold text-gray-800">&lt; 2 Seconds</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Content */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              {/* Form Section */}
+              <div className="lg:col-span-2">
+                <div className="bg-white rounded-2xl shadow-deep overflow-hidden">
+                  <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-6">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h2 className="text-2xl font-bold text-white">Client Profile</h2>
+                        <p className="text-blue-100">Enter client details for lender matching</p>
+                      </div>
+                      <div className="bg-white/20 p-3 rounded-full">
+                        <i className="fas fa-user-tie text-white text-2xl"></i>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="p-6">
+                    {error && (
+                      <div className="mb-6 bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                        <div className="flex items-center">
+                          <i className="fas fa-exclamation-circle text-red-500 text-xl mr-3"></i>
+                          <div>
+                            <p className="font-bold text-red-800">Connection Error</p>
+                            <p className="text-red-700 text-sm">{error}</p>
+                          </div>
+                        </div>
+                      </div>
                     )}
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Financial Details */}
+                      <div className="space-y-4">
+                        <div className="border-l-4 border-blue-500 pl-4">
+                          <h3 className="font-bold text-gray-700 flex items-center">
+                            <i className="fas fa-money-check-alt mr-2 text-blue-500"></i>
+                            Financial Details
+                          </h3>
+                        </div>
+                        
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-dollar-sign text-green-500 mr-1"></i>
+                              Loan Amount
+                            </label>
+                            <div className="relative">
+                              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <span className="text-gray-500">$</span>
+                              </div>
+                              <input 
+                                type="number" 
+                                className="pl-8 w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                                placeholder="e.g., 50,000" 
+                                value={formData.loanAmount} 
+                                onChange={e => update("loanAmount", e.target.value)} 
+                              />
+                            </div>
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-percentage text-purple-500 mr-1"></i>
+                              Deposit Percentage
+                            </label>
+                            <div className="relative">
+                              <input 
+                                type="number" 
+                                min="0" 
+                                max="100" 
+                                step="0.1"
+                                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                                placeholder="Enter deposit %" 
+                                value={formData.depositPercent} 
+                                onChange={e => update("depositPercent", e.target.value)} 
+                              />
+                              <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                                <span className="text-gray-500">%</span>
+                              </div>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {formData.isAssetBacked === "Yes" 
+                                ? "Deposit may be waived for asset-backed"
+                                : "Required for non-asset backed"}
+                            </p>
+                          </div>
+                          
+                          {/* NEW: Credit Score Section */}
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-chart-bar text-blue-500 mr-1"></i>
+                              Credit Score Type
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.creditScoreType} 
+                              onChange={e => update("creditScoreType", e.target.value)}
+                            >
+                              <option value="N/A">N/A (No credit score available)</option>
+                              <option value="Comprehensive">Comprehensive (Equifax)</option>
+                              <option value="Veda">Veda Score</option>
+                              <option value="Both">Both Comprehensive & Veda</option>
+                            </select>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {formData.creditScoreType === "N/A" 
+                                ? "Fewer lenders will be available" 
+                                : formData.creditScoreType === "Both"
+                                ? "Maximum lender options available"
+                                : "Lenders requiring this score type will be shown"}
+                            </p>
+                          </div>
+                          
+                          {/* Comprehensive Score Input (shown when Comprehensive or Both selected) */}
+                          {(formData.creditScoreType === "Comprehensive" || formData.creditScoreType === "Both") && (
+                            <div>
+                              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                <i className="fas fa-file-contract text-blue-500 mr-1"></i>
+                                Comprehensive (Equifax) Score
+                              </label>
+                              <input 
+                                type="number" 
+                                min="0" 
+                                max="1200"
+                                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                                placeholder="Enter Comprehensive score" 
+                                value={formData.creditScoreComprehensive} 
+                                onChange={e => update("creditScoreComprehensive", e.target.value)} 
+                              />
+                              <p className="text-xs text-gray-500 mt-1">
+                                Required by lenders with "Equifax_Credit_Score" requirements
+                              </p>
+                            </div>
+                          )}
+                          
+                          {/* Veda Score Input (shown when Veda or Both selected) */}
+                          {(formData.creditScoreType === "Veda" || formData.creditScoreType === "Both") && (
+                            <div>
+                              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                <i className="fas fa-chart-line text-purple-500 mr-1"></i>
+                                Veda Credit Score
+                              </label>
+                              <input 
+                                type="number" 
+                                min="0" 
+                                max="1200"
+                                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                                placeholder="Enter Veda score" 
+                                value={formData.creditScoreVeda} 
+                                onChange={e => update("creditScoreVeda", e.target.value)} 
+                              />
+                              <p className="text-xs text-gray-500 mt-1">
+                                Required by lenders with "Veda_Credit_Score" requirements
+                              </p>
+                            </div>
+                          )}
+                          
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-calendar-alt text-purple-500 mr-1"></i>
+                              Loan Term
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.loanTerm} 
+                              onChange={e => update("loanTerm", e.target.value)}
+                            >
+                              <option value="12">12 months (1 year)</option>
+                              <option value="24">24 months (2 years)</option>
+                              <option value="36">36 months (3 years)</option>
+                              <option value="48">48 months (4 years)</option>
+                              <option value="60">60 months (5 years)</option>
+                              <option value="72">72 months (6 years)</option>
+                              <option value="84">84 months (7 years)</option>
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-balloon text-blue-500 mr-1"></i>
+                              Balloon Payment
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.balloonPercent} 
+                              onChange={e => update("balloonPercent", e.target.value)}
+                            >
+                              <option value="0">0%</option>
+                              <option value="5">5%</option>
+                              <option value="10">10%</option>
+                              <option value="15">15%</option>
+                              <option value="20">20%</option>
+                              <option value="25">25%</option>
+                              <option value="30">30%</option>
+                              <option value="35">35%</option>
+                              <option value="40">40%</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Business & Asset Details */}
+                      <div className="space-y-4">
+                        <div className="border-l-4 border-purple-500 pl-4">
+                          <h3 className="font-bold text-gray-700 flex items-center">
+                            <i className="fas fa-building mr-2 text-purple-500"></i>
+                            Business & Asset Details
+                          </h3>
+                        </div>
+                        
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-user-tag text-blue-500 mr-1"></i>
+                              Entity Type
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.entityType} 
+                              onChange={e => update("entityType", e.target.value)}
+                            >
+                              <option value="PtyLtd">Pty Ltd</option>
+                              <option value="SoleTrader">Sole Trader</option>
+                              <option value="Trust">Trust</option>
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-history text-purple-500 mr-1"></i>
+                              ABN Age
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.abnAge} 
+                              onChange={e => update("abnAge", e.target.value)}
+                            >
+                              <option value="N/A - 3 months">N/A - 3 months</option>
+                              <option value="3-6">3-6 months</option>
+                              <option value="6-12">6-12 months</option>
+                              <option value="1-2 year">1-2 years</option>
+                              <option value="2-3 year">2-3 years</option>
+                              <option value="3 + year">3+ years</option>
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-file-invoice text-blue-500 mr-1"></i>
+                              GST Registered?
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.gstRegistered} 
+                              onChange={e => update("gstRegistered", e.target.value)}
+                            >
+                              <option value="Yes">Yes</option>
+                              <option value="No">No</option>
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-car text-purple-500 mr-1"></i>
+                              Asset Type
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.assetType} 
+                              onChange={e => update("assetType", e.target.value)}
+                            >
+                              <option value="Asset_Car">Car / Van</option>
+                              <option value="Asset_Truck">Truck / Heavy Vehicle</option>
+                              <option value="Asset_Equipment">Equipment</option>
+                            </select>
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                              <i className="fas fa-clock text-blue-500 mr-1"></i>
+                              Asset Age
+                            </label>
+                            <select 
+                              className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                              value={formData.assetAge} 
+                              onChange={e => update("assetAge", e.target.value)}
+                            >
+                              <option value="0">New (0 years)</option>
+                              <option value="1">1 year</option>
+                              <option value="2">2 years</option>
+                              <option value="3">3 years</option>
+                              <option value="4">4 years</option>
+                              <option value="5">5 years</option>
+                              <option value="6">6 years</option>
+                              <option value="7">7 years</option>
+                              <option value="8">8 years</option>
+                              <option value="9">9 years</option>
+                              <option value="10">10 years</option>
+                              <option value="11">11 years</option>
+                              <option value="12">12 years</option>
+                              <option value="13">13 years</option>
+                              <option value="14">14 years</option>
+                              <option value="15">15 years</option>
+                              <option value="15+">15+ years</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Additional Information */}
+                    <div className="mt-8 pt-6 border-t border-gray-200">
+                      <div className="border-l-4 border-green-500 pl-4 mb-4">
+                        <h3 className="font-bold text-gray-700 flex items-center">
+                          <i className="fas fa-info-circle mr-2 text-green-500"></i>
+                          Additional Information
+                        </h3>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-sm font-semibold text-gray-700 mb-2">
+                            <i className="fas fa-user text-blue-500 mr-1"></i>
+                            Applicant Age
+                          </label>
+                          <select 
+                            className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                            value={formData.lendeeAge} 
+                            onChange={e => update("lendeeAge", e.target.value)}
+                          >
+                            <option value="18-25">18-25</option>
+                            <option value="25+">25+</option>
+                          </select>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-semibold text-gray-700 mb-2">
+                            <i className="fas fa-home text-purple-500 mr-1"></i>
+                            Residential Proof
+                          </label>
+                          <select 
+                            className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50" 
+                            value={formData.residentialProof} 
+                            onChange={e => update("residentialProof", e.target.value)}
+                          >
+                            <option value="No">No</option>
+                            <option value="6 months">6 months</option>
+                            <option value="12 months">12 months</option>
+                            <option value="24 months +">24 months +</option>
+                          </select>
+                        </div>
+                        
+                        <div className="space-y-4">
+                          <div className="flex items-center space-x-3">
+                            <label className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg border border-gray-200 w-full">
+                              <input 
+                                type="checkbox" 
+                                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" 
+                                checked={formData.isHomeOwner === "Yes"} 
+                                onChange={e => update("isHomeOwner", e.target.checked ? "Yes" : "No")} 
+                              />
+                              <span className="font-medium text-gray-700">
+                                <i className="fas fa-house-user text-blue-500 mr-2"></i>
+                                Home Owner
+                              </span>
+                            </label>
+                          </div>
+                          
+                          <div className="flex items-center space-x-3">
+                            <label className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg border border-gray-200 w-full">
+                              <input 
+                                type="checkbox" 
+                                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" 
+                                checked={formData.isAssetBacked === "Yes"} 
+                                onChange={e => update("isAssetBacked", e.target.checked ? "Yes" : "No")} 
+                              />
+                              <span className="font-medium text-gray-700">
+                                <i className="fas fa-landmark text-green-500 mr-2"></i>
+                                Asset Backed
+                              </span>
+                            </label>
+                          </div>
+                          
+                          <div className="flex items-center space-x-3">
+                            <label className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg border border-gray-200 w-full">
+                              <input 
+                                type="checkbox" 
+                                className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" 
+                                checked={formData.provideBankStatements === "Yes"} 
+                                onChange={e => update("provideBankStatements", e.target.checked ? "Yes" : "No")} 
+                              />
+                              <span className="font-medium text-gray-700">
+                                <i className="fas fa-file-invoice-dollar text-purple-500 mr-2"></i>
+                                Bank Statements
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Action Button */}
+                    <div className="mt-8 pt-6 border-t border-gray-200">
+                      <button 
+                        onClick={calculateMatch} 
+                        disabled={lenders.length === 0 || loading}
+                        className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-4 px-6 rounded-xl font-bold text-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl flex items-center justify-center"
+                      >
+                        {loading ? (
+                          <>
+                            <i className="fas fa-spinner fa-spin mr-3"></i>
+                            Processing...
+                          </>
+                        ) : (
+                          <>
+                            <i className="fas fa-rocket mr-3"></i>
+                            Find Perfect Lender Matches
+                          </>
+                        )}
+                      </button>
+                      {lenders.length === 0 && !loading && (
+                        <p className="text-center text-red-500 mt-2 text-sm">
+                          <i className="fas fa-exclamation-triangle mr-1"></i>
+                          No lenders loaded. Please check connection.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Instructions & Stats Sidebar */}
+              <div className="lg:col-span-1">
+                <div className="sticky top-8 space-y-6">
+                  <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl p-6 shadow-deep">
+                    <div className="flex items-center mb-4">
+                      <div className="bg-white/20 p-3 rounded-xl mr-4">
+                        <i className="fas fa-lightbulb text-2xl"></i>
+                      </div>
+                      <h3 className="text-xl font-bold">Credit Score Tips</h3>
+                    </div>
+                    <ul className="space-y-3">
+                      <li className="flex items-start">
+                        <i className="fas fa-info-circle text-blue-300 mr-3 mt-1"></i>
+                        <span><strong>N/A:</strong> Fewest lender options</span>
+                      </li>
+                      <li className="flex items-start">
+                        <i className="fas fa-check-circle text-green-300 mr-3 mt-1"></i>
+                        <span><strong>Comprehensive:</strong> Standard Equifax score</span>
+                      </li>
+                      <li className="flex items-start">
+                        <i className="fas fa-check-circle text-green-300 mr-3 mt-1"></i>
+                        <span><strong>Veda:</strong> Alternative credit scoring</span>
+                      </li>
+                      <li className="flex items-start">
+                        <i className="fas fa-star text-yellow-300 mr-3 mt-1"></i>
+                        <span><strong>Both:</strong> Maximum lender availability</span>
+                      </li>
+                    </ul>
+                  </div>
+                  
+                  <div className="bg-white rounded-2xl p-6 shadow-deep">
+                    <h3 className="font-bold text-gray-800 mb-4 flex items-center">
+                      <i className="fas fa-tachometer-alt text-blue-500 mr-3"></i>
+                      System Status
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-sm font-medium text-gray-700">Lender Database</span>
+                          <span className="text-sm font-bold text-blue-600">{lenders.length} loaded</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div 
+                            className="bg-green-500 h-2 rounded-full" 
+                            style={{ width: `${Math.min(100, (lenders.length / 100) * 100)}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-sm font-medium text-gray-700">Fee Optimization</span>
+                          <span className="text-sm font-bold text-green-600">Active</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div className="bg-green-500 h-2 rounded-full w-full"></div>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-sm font-medium text-gray-700">Hard Stop Checks</span>
+                          <span className="text-sm font-bold text-purple-600">12 Active</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div className="bg-purple-500 h-2 rounded-full w-full"></div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {loading && (
+                      <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-100">
+                        <div className="flex items-center">
+                          <i className="fas fa-sync-alt fa-spin text-blue-500 mr-3"></i>
+                          <span className="font-medium text-blue-800">Loading lender data...</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="bg-white rounded-2xl p-6 shadow-deep">
+                    <h3 className="font-bold text-gray-800 mb-4 flex items-center">
+                      <i className="fas fa-calculator text-purple-500 mr-3"></i>
+                      Fee Example
+                    </h3>
+                    <div className="space-y-3">
+                      <div className="text-sm">
+                        <p className="text-gray-500 mb-1">Loan: $100,000</p>
+                        <p className="text-gray-500 mb-1">Max %: 10%</p>
+                        <p className="text-gray-500 mb-1">Max Flat Fee: $1,000</p>
+                        <div className="mt-2 pt-2 border-t border-gray-200">
+                          <p className="font-bold text-green-600">
+                            Total Fee: $11,000
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            ($100,000 × 10% = $10,000 + $1,000 = $11,000)
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Results Section */}
+            {results && (
+              <div className="mt-8">
+                {/* Results Header */}
+                <div className="bg-white rounded-2xl p-6 mb-6 shadow-deep">
+                  <div className="flex flex-col md:flex-row justify-between items-center">
+                    <div>
+                      <h2 className="text-2xl font-bold text-gray-800">Lender Match Results</h2>
+                      <p className="text-gray-600">Optimized for client rates & brokerage fees</p>
+                    </div>
+                    <div className="mt-4 md:mt-0 bg-gradient-to-r from-green-500 to-emerald-500 text-white px-6 py-3 rounded-xl font-bold text-lg">
+                      <i className="fas fa-trophy mr-2"></i>
+                      {results.length} Qualified Lender{results.length !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Best Fit */}
+                {results.length > 0 && (
+                  <div className="mb-8">
+                    <div className="flex items-center mb-4">
+                      <div className="bg-gradient-to-r from-yellow-500 to-yellow-600 text-white px-4 py-2 rounded-xl font-bold mr-4">
+                        <i className="fas fa-crown mr-2"></i>
+                        OPTIMAL MATCH
+                      </div>
+                      <h3 className="text-xl font-bold text-gray-800">Best Overall Value</h3>
+                    </div>
+                    
+                    <div className="bg-gradient-to-br from-white to-blue-50 rounded-2xl p-6 shadow-deep border border-blue-100">
+                      <div className="flex flex-col lg:flex-row">
+                        <div className="lg:w-2/3 pr-6">
+                          <div className="flex items-start justify-between mb-6">
+                            <div>
+                              <h3 className="text-2xl font-bold text-gray-900">
+                                {results[0].Lender_Name.replace(/_/g, ' ')}
+                              </h3>
+                              <div className="flex items-center mt-2">
+                                <span className="px-4 py-2 rounded-full font-semibold bg-gradient-to-r from-green-100 to-green-50 text-green-800 border border-green-200">
+                                  <i className="fas fa-star mr-2"></i>
+                                  Quality Score: {results[0].lenderQuality?.score.toFixed(1)}/100
+                                </span>
+                                <span className="ml-4 text-sm text-gray-600">
+                                  <i className="fas fa-check-circle text-green-500 mr-1"></i>
+                                  All criteria satisfied
+                                </span>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-3xl font-bold text-green-600">✓ Qualified</div>
+                              <div className="text-sm text-gray-600 mt-1">Perfect balance of value</div>
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                            <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                              <p className="text-xs text-gray-500 uppercase font-semibold">Loan Range</p>
+                              <p className="text-lg font-bold text-gray-900">${results[0].Min_Loan_Amount || '0'} - ${results[0].Max_Loan_Amount || 'No Max'}</p>
+                            </div>
+                            <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                              <p className="text-xs text-gray-500 uppercase font-semibold">Standard Rate</p>
+                              <p className="text-lg font-bold text-gray-900">{results[0].Standard_Rate || 'N/A'}%</p>
+                            </div>
+                            <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                              <p className="text-xs text-gray-500 uppercase font-semibold">Total Brokerage</p>
+                              <p className="text-lg font-bold text-purple-900">${results[0].totalBrokerageFee?.toLocaleString() || '0'}</p>
+                            </div>
+                            <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                              <p className="text-xs text-gray-500 uppercase font-semibold">Max Term</p>
+                              <p className="text-lg font-bold text-gray-900">{results[0].Loan_Length || '60'} months</p>
+                            </div>
+                          </div>
+                          
+                          {/* Credit Score Requirements */}
+                          <div className="mb-6 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                            <h4 className="font-bold text-gray-800 mb-3 flex items-center">
+                              <i className="fas fa-chart-bar text-blue-500 mr-2"></i>
+                              Credit Score Requirements Met:
+                            </h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {results[0].Equifax_Credit_Score && (
+                                <div className="bg-white p-3 rounded-lg border border-green-100">
+                                  <div className="flex items-center">
+                                    <i className="fas fa-check-circle text-green-500 mr-3"></i>
+                                    <div>
+                                      <p className="text-sm font-medium text-gray-700">Comprehensive (Equifax)</p>
+                                      <p className="text-xs text-gray-500">Requirement: {results[0].Equifax_Credit_Score}</p>
+                                      <p className="text-xs text-green-600 font-medium">
+                                        Your score: {formData.creditScoreComprehensive || 'N/A'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              {results[0].Veda_Credit_Score && (
+                                <div className="bg-white p-3 rounded-lg border border-green-100">
+                                  <div className="flex items-center">
+                                    <i className="fas fa-check-circle text-green-500 mr-3"></i>
+                                    <div>
+                                      <p className="text-sm font-medium text-gray-700">Veda Score</p>
+                                      <p className="text-xs text-gray-500">Requirement: {results[0].Veda_Credit_Score}</p>
+                                      <p className="text-xs text-green-600 font-medium">
+                                        Your score: {formData.creditScoreVeda || 'N/A'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              {!results[0].Equifax_Credit_Score && !results[0].Veda_Credit_Score && (
+                                <div className="bg-white p-3 rounded-lg border border-green-100">
+                                  <div className="flex items-center">
+                                    <i className="fas fa-check-circle text-green-500 mr-3"></i>
+                                    <div>
+                                      <p className="text-sm font-medium text-gray-700">No Credit Score Required</p>
+                                      <p className="text-xs text-gray-500">This lender doesn't require credit scores</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* Brokerage Fee Breakdown */}
+                          <div className="mb-6 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                            <h4 className="font-bold text-gray-800 mb-3 flex items-center">
+                              <i className="fas fa-money-bill-wave text-blue-500 mr-2"></i>
+                              Brokerage Fee Breakdown:
+                            </h4>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                              <div className="bg-white p-3 rounded-lg border border-gray-100">
+                                <p className="text-sm text-gray-500">Percentage Fee</p>
+                                <p className="text-lg font-bold text-gray-900">
+                                  ${formData.loanAmount ? (parseFloat(formData.loanAmount) * (parseFloat(results[0].Max_Brokerage_Percent || 0) / 100)).toLocaleString() : '0'}
+                                  <span className="text-sm text-gray-600 ml-2">({results[0].Max_Brokerage_Percent || 0}%)</span>
+                                </p>
+                              </div>
+                              <div className="bg-white p-3 rounded-lg border border-gray-100">
+                                <p className="text-sm text-gray-500">Flat Fee</p>
+                                <p className="text-lg font-bold text-gray-900">
+                                  ${results[0].Max_Brokerage_Fee ? parseFloat(results[0].Max_Brokerage_Fee).toLocaleString() : '0'}
+                                </p>
+                              </div>
+                              <div className="bg-white p-3 rounded-lg border border-green-100 bg-green-50">
+                                <p className="text-sm text-gray-500">Total Fee</p>
+                                <p className="text-lg font-bold text-green-700">
+                                  ${results[0].totalBrokerageFee?.toLocaleString() || '0'}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Quality Score Breakdown */}
+                          <div className="mb-6">
+                            <h4 className="font-bold text-gray-800 mb-3 flex items-center">
+                              <i className="fas fa-chart-pie text-blue-500 mr-2"></i>
+                              Quality Score Breakdown:
+                            </h4>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                              {results[0].lenderQuality?.factors.map((factor, i) => (
+                                <div key={i} className="bg-gray-50 p-3 rounded-lg border border-gray-100">
+                                  <div className="flex justify-between mb-1">
+                                    <span className="text-sm font-medium text-gray-700">{factor.name}</span>
+                                    <span className="text-sm font-bold text-blue-600">{factor.score.toFixed(1)}/{factor.max}</span>
+                                  </div>
+                                  <div className="w-full bg-gray-200 rounded-full h-2">
+                                    <div 
+                                      className="bg-green-500 h-2 rounded-full" 
+                                      style={{ width: `${(factor.score / factor.max) * 100}%` }}
+                                    ></div>
+                                  </div>
+                                  <p className="text-xs text-gray-500 mt-1">{factor.value}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className="lg:w-1/3 lg:border-l lg:pl-6 lg:border-gray-200">
+                          <div className="bg-blue-50 p-4 rounded-xl mb-4">
+                            <h4 className="font-bold text-gray-800 mb-2 flex items-center">
+                              <i className="fas fa-balance-scale text-blue-500 mr-2"></i>
+                              Value Proposition
+                            </h4>
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-600">Client Benefit:</span>
+                                <span className="font-bold text-green-600">
+                                  {results[0].Standard_Rate ? `${results[0].Standard_Rate}% rate` : 'Good rate'}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-600">Brokerage Benefit:</span>
+                                <span className="font-bold text-purple-600">
+                                  ${results[0].totalBrokerageFee?.toLocaleString() || '0'} fee
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm text-gray-600">Internal Ranking:</span>
+                                <span className="font-bold text-yellow-600">
+                                  {results[0].Lender_Ranking || '5'}/10
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {results.length > 1 && (
+                            <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100">
+                              <h4 className="font-bold text-gray-800 mb-2 flex items-center">
+                                <i className="fas fa-chart-line text-yellow-500 mr-2"></i>
+                                Comparison with #2
+                              </h4>
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between text-sm">
+                                  <span className="text-gray-600">Quality Score:</span>
+                                  <span className="font-bold">
+                                    +{(results[0].lenderQuality?.score - results[1].lenderQuality?.score).toFixed(1)} points
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between text-sm">
+                                  <span className="text-gray-600">Brokerage Fee:</span>
+                                  <span className="font-bold text-green-600">
+                                    +${(results[0].totalBrokerageFee - results[1].totalBrokerageFee).toLocaleString()}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between text-sm">
+                                  <span className="text-gray-600">Interest Rate:</span>
+                                  <span className="font-bold text-blue-600">
+                                    {(results[0].Standard_Rate - results[1].Standard_Rate).toFixed(1)}% better
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
-                {results.map((lender, idx) => (
-                  <div key={idx} className="bg-white rounded-lg shadow-md p-6 border-l-4 border-red-600">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="text-xl font-bold text-gray-900">{lender.Lender_Name}</h3>
-                        <p className="text-sm text-gray-600 mt-1">Match Score: {lender.finalScore}%</p>
+                
+                {/* Other Qualified Lenders */}
+                {results.length > 1 && (
+                  <div className="mb-8">
+                    <div className="flex items-center mb-4">
+                      <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white px-4 py-2 rounded-xl font-bold mr-4">
+                        <i className="fas fa-list-check mr-2"></i>
+                        ALTERNATIVE OPTIONS
                       </div>
-                      <div>
-                        <span className={`px-3 py-1 rounded-full text-sm font-semibold ${lender.finalScore >= 80 ? 'bg-green-100 text-green-800' : lender.finalScore >= 70 ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                          {lender.finalScore >= 80 ? 'Excellent' : lender.finalScore >= 70 ? 'Good' : 'Fair'}
-                        </span>
-                      </div>
+                      <h3 className="text-xl font-bold text-gray-800">Other Qualified Lenders ({results.length - 1})</h3>
                     </div>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {results.slice(1).map((lender, idx) => (
+                        <div key={idx} className="bg-white rounded-2xl p-6 shadow-soft border border-gray-100 hover:shadow-md transition-all duration-300 hover:border-blue-100">
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <h3 className="text-xl font-bold text-gray-900">{lender.Lender_Name.replace(/_/g, ' ')}</h3>
+                              <div className="flex items-center mt-2">
+                                <span className="px-3 py-1 rounded-full text-sm font-semibold bg-gradient-to-r from-blue-100 to-blue-50 text-blue-800 border border-blue-200">
+                                  <i className="fas fa-chart-line mr-1"></i>
+                                  Quality: {lender.lenderQuality?.score.toFixed(1)}/100
+                                </span>
+                              </div>
+                            </div>
+                          </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                      <div>
-                        <p className="text-xs text-gray-500">Loan Range</p>
-                        <p className="text-sm font-semibold text-gray-900">${lender.Min_Loan_Amount || '0'} - ${lender.Max_Loan_Amount || 'No Max'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Max Term</p>
-                        <p className="text-sm font-semibold text-gray-900">{lender.Loan_Length || '60'} months</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Max Balloon</p>
-                        <p className="text-sm font-semibold text-gray-900">{lender.Balloon_Max || '0'}%</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Doc Type</p>
-                        <p className="text-sm font-semibold text-gray-900">{lender.Need_Bank_Statements === "Yes" ? "Full Doc" : "Low Doc"}</p>
-                      </div>
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                            <div className="bg-gray-50 p-3 rounded-lg">
+                              <p className="text-xs text-gray-500">Standard Rate</p>
+                              <p className="text-sm font-semibold text-gray-900">{lender.Standard_Rate || 'N/A'}%</p>
+                            </div>
+                            <div className="bg-gray-50 p-3 rounded-lg">
+                              <p className="text-xs text-gray-500">Total Brokerage</p>
+                              <p className="text-sm font-semibold text-purple-900">${lender.totalBrokerageFee?.toLocaleString() || '0'}</p>
+                            </div>
+                            <div className="bg-gray-50 p-3 rounded-lg">
+                              <p className="text-xs text-gray-500">Max Term</p>
+                              <p className="text-sm font-semibold text-gray-900">{lender.Loan_Length || '60'} months</p>
+                            </div>
+                            <div className="bg-gray-50 p-3 rounded-lg">
+                              <p className="text-xs text-gray-500">Internal Rank</p>
+                              <p className="text-sm font-semibold text-gray-900">{lender.Lender_Ranking || '5'}/10</p>
+                            </div>
+                          </div>
+
+                          {/* Credit Score Info */}
+                          {(lender.Equifax_Credit_Score || lender.Veda_Credit_Score) && (
+                            <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                              <p className="text-sm text-blue-800">
+                                <i className="fas fa-chart-bar mr-2"></i>
+                                <span className="font-medium">Credit Requirements:</span>
+                                {lender.Equifax_Credit_Score && ` Equifax: ${lender.Equifax_Credit_Score}`}
+                                {lender.Veda_Credit_Score && ` Veda: ${lender.Veda_Credit_Score}`}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Fee Breakdown */}
+                          <div className="mb-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                            <p className="text-sm text-blue-800">
+                              <i className="fas fa-calculator mr-2"></i>
+                              <span className="font-medium">Fee:</span> {lender.Max_Brokerage_Percent || 0}% + ${lender.Max_Brokerage_Fee || 0} flat
+                            </p>
+                          </div>
+
+                          {/* Quality Factors */}
+                          <div className="mb-4">
+                            <p className="text-sm font-medium text-gray-700 mb-2">Quality Factors:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {lender.lenderQuality?.factors.map((factor, i) => (
+                                <span key={i} className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-medium">
+                                  {factor.name}: {factor.score.toFixed(1)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="text-sm text-gray-600 flex items-center p-3 bg-gray-50 rounded-lg">
+                            <i className="fas fa-lightbulb text-yellow-500 mr-2"></i>
+                            {lender.lenderQuality?.score < results[0].lenderQuality?.score ? 
+                              `Alternative to ${results[0].Lender_Name.replace(/_/g, ' ')}` : 
+                              "Strong contender"}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-
-                    {/* NEW: Display deposit requirement if applicable */}
-                    {lender.If_Non_Asset_Backed && (
-                      <div className="mb-3 p-3 bg-blue-50 rounded border border-blue-100">
-                        <p className="text-sm text-blue-800 font-medium">
-                          <i className="fas fa-info-circle mr-2"></i>
-                          Non-Asset Backed Requirement: {lender.If_Non_Asset_Backed}
-                        </p>
-                        {lender.depositNote && (
-                          <p className="text-sm text-blue-700 mt-1">
-                            <i className="fas fa-check-circle mr-2"></i>
-                            {formData.isAssetBacked === "No" 
-                              ? `✓ Deposit satisfied: ${formData.depositPercent}% meets requirement`
-                              : lender.depositNote}
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {lender.Special_Notes && (
-                      <div className="bg-gray-50 rounded p-3 mb-4">
-                        <p className="text-sm text-gray-700"><span className="font-semibold">Notes:</span> {lender.Special_Notes}</p>
-                      </div>
-                    )}
-
-                    {lender.reasons.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {lender.reasons.map((reason, i) => (
-                          <span key={i} className="bg-red-50 text-red-700 px-3 py-1 rounded-full text-xs font-medium">✓ {reason}</span>
-                        ))}
-                      </div>
-                    )}
                   </div>
-                ))}
+                )}
+                
+                {/* No Results */}
+                {results.length === 0 && (
+                  <div className="bg-gradient-to-br from-yellow-50 to-orange-50 rounded-2xl p-8 border border-yellow-100 shadow-deep">
+                    <div className="text-center">
+                      <div className="inline-block bg-yellow-100 p-4 rounded-full mb-4">
+                        <i className="fas fa-search text-4xl text-yellow-600"></i>
+                      </div>
+                      <h3 className="text-2xl font-bold text-yellow-800 mb-2">No Perfect Matches Found</h3>
+                      <p className="text-yellow-700 mb-6 max-w-2xl mx-auto">
+                        Our analysis didn't find lenders that match all your current criteria. Try adjusting your parameters for better results.
+                      </p>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                        <div className="bg-white p-5 rounded-xl border border-yellow-100 shadow-sm">
+                          <div className="text-yellow-600 text-2xl mb-3">
+                            <i className="fas fa-percentage"></i>
+                          </div>
+                          <h4 className="font-bold text-gray-800 mb-2">Increase Deposit</h4>
+                          <p className="text-sm text-gray-600">Try 20%+ deposit for non-asset backed applications.</p>
+                        </div>
+                        
+                        <div className="bg-white p-5 rounded-xl border border-yellow-100 shadow-sm">
+                          <div className="text-yellow-600 text-2xl mb-3">
+                            <i className="fas fa-file-invoice-dollar"></i>
+                          </div>
+                          <h4 className="font-bold text-gray-800 mb-2">Adjust Loan Amount</h4>
+                          <p className="text-sm text-gray-600">Consider a smaller loan amount or different term.</p>
+                        </div>
+                        
+                        <div className="bg-white p-5 rounded-xl border border-yellow-100 shadow-sm">
+                          <div className="text-yellow-600 text-2xl mb-3">
+                            <i className="fas fa-user-check"></i>
+                          </div>
+                          <h4 className="font-bold text-gray-800 mb-2">Improve Documentation</h4>
+                          <p className="text-sm text-gray-600">Bank statements can significantly expand options.</p>
+                        </div>
+                      </div>
+                      
+                      <button 
+                        onClick={calculateMatch}
+                        className="bg-gradient-to-r from-yellow-500 to-orange-500 text-white font-bold py-4 px-8 rounded-xl text-lg hover:from-yellow-600 hover:to-orange-600 transition-all shadow-lg hover:shadow-xl"
+                      >
+                        <i className="fas fa-redo mr-2"></i>
+                        Try Again with Adjusted Criteria
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
+            
+            {/* Footer */}
+            <div className="mt-12 pt-8 border-t border-gray-200 text-center text-gray-500 text-sm">
+              <p>Beaver Match Pro v2.0 • AI-Powered Lender Matching Engine • © {new Date().getFullYear()} Finance Broker Tools</p>
+              <p className="mt-1">Credit Options: Comprehensive (Equifax) • Veda • Both • Last updated: Today</p>
+            </div>
           </div>
         </div>
       );
