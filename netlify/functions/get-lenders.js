@@ -60,7 +60,7 @@ exports.handler = async function(event, context) {
   }
 
   // Build Google Sheets API URL
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Lenders!A1:AE100?key=${API_KEY}`;
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/Lenders!A1:AN315?key=${API_KEY}`;
 
   // Fetch data from Google Sheets
   return new Promise((resolve) => {
