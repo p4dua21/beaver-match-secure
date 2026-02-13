@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Beaver Match Pro v4.4 | AI Lender Matching Engine</title>
+  <title>Beaver Match Pro v4.5 | AI Lender Matching Engine</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -340,7 +340,7 @@
         return percentFee + maxFee;
       }
 
-      // ---------- UPDATED SCORING (v4.4) ----------
+      // ---------- SCORING (v4.5) ----------
       // Weights: Interest 50%, Brokerage % 40%, Broker Fee 10%
       function calculateScore(lender, loanAmount) {
         const weights = { 
@@ -370,7 +370,7 @@
           100 - (fee / 2000 * 100)
         ));
 
-        // Weighted sum (weights already sum to 1.0)
+        // Weighted sum
         const totalScore = 
           interestScore * weights.interest +
           brokerPctScore * weights.brokeragePct +
@@ -387,7 +387,7 @@
       const shouldShowBusinessSection = () => formData.financeCategory === "Commercial Asset" || formData.financeCategory === "Commercial Cash Finance";
       const shouldShowConsumerSection = () => formData.financeCategory === "Consumer";
 
-      // ---------- HARD STOP CHECKS (unchanged, with 24-month capping) ----------
+      // ---------- HARD STOP CHECKS (with 24-month capping) ----------
       function calculateMatch() {
         if (!formData.loanAmount) { alert("Please enter a loan amount"); return; }
         if (!formData.financeCategory) { alert("Please select a finance category"); return; }
@@ -641,7 +641,7 @@
             }
           }
 
-          // 24. Deposit for Non-Asset Backed (this is a HARD STOP, not used in scoring)
+          // 24. Deposit for Non-Asset Backed
           if (l.If_Non_Asset_Backed && formData.isAssetBacked === "No") {
             const depositRequirement = parseDepositRequirement(l['_Deposit (Non-Asset)']);
             if (depositRequirement.disqualified) {
@@ -664,14 +664,17 @@
         });
 
         const included = evaluated.filter(l => !l.isExcluded).sort((a,b) => b.score - a.score);
-        const excluded = evaluated.filter(l => l.isExcluded);
+        
+        // ----- SORT EXCLUDED BY FEWEST REASONS FIRST (closest to qualifying) -----
+        const excluded = evaluated.filter(l => l.isExcluded)
+          .sort((a, b) => a.exclusionReasons.length - b.exclusionReasons.length);
 
         setResults(included);
         setExcludedResults(excluded);
         setShowExcluded(false);
       }
 
-      // ---------- RENDER (unchanged except version text) ----------
+      // ---------- RENDER ----------
       return (
         <div className="min-h-screen">
           {/* Header */}
@@ -683,8 +686,8 @@
                     <i className="fas fa-piggy-bank text-2xl text-purple-600"></i>
                   </div>
                   <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Beaver Match Pro v4.4</h1>
-                    <p className="text-blue-100 font-medium"> AI Matching System</p>
+                    <h1 className="text-3xl font-bold tracking-tight">Beaver Match Pro v4.5</h1>
+                    <p className="text-blue-100 font-medium">Excluded lenders sorted by fewest reasons</p>
                   </div>
                 </div>
                 <div className="flex items-center space-x-4">
@@ -827,7 +830,7 @@
                       </div>
                     )}
                     
-                    {/* STEP 2: All Other Questions - identical to previous version */}
+                    {/* STEP 2: All Other Questions */}
                     {formData.financeCategory && (
                       <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-4">
                         {/* Basic Information */}
@@ -1622,7 +1625,7 @@
               </div>
             )}
 
-            {/* ---------- EXCLUDED LENDERS SECTION ---------- */}
+            {/* ---------- EXCLUDED LENDERS SECTION (SORTED BY FEWEST REASONS) ---------- */}
             {excludedResults && excludedResults.length > 0 && (
               <div className="mt-10">
                 <div 
@@ -1639,7 +1642,7 @@
                           Why Others Didn't Qualify ({excludedResults.length} lenders)
                         </h3>
                         <p className="text-sm text-gray-600">
-                          Click to {showExcluded ? 'hide' : 'show'} exclusion reasons
+                          Sorted by fewest reasons first • Click to {showExcluded ? 'hide' : 'show'}
                         </p>
                       </div>
                     </div>
@@ -1655,6 +1658,9 @@
                           <div>
                             <h4 className="text-lg font-bold text-gray-900">{lender.Lender_Name}</h4>
                             <p className="text-md text-gray-700">{lender.Product}</p>
+                            <span className="text-xs text-gray-500 mt-1 block">
+                              {lender.exclusionReasons.length} reason{lender.exclusionReasons.length !== 1 ? 's' : ''}
+                            </span>
                           </div>
                           <span className="px-3 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800 border border-red-300">
                             Excluded
@@ -1682,8 +1688,8 @@
 
             {/* Footer */}
             <div className="mt-12 pt-8 border-t border-gray-200 text-center text-gray-500 text-sm">
-              <p>Beaver Match Pro v4.4 {new Date().getFullYear()} Finance Broker Tools</p>
-              <p className="mt-1">Database: {lenders.length} lender products • Hard Stop Checks: Active • Scoring: Active • Exclusion Tracking: Active</p>
+              <p>Beaver Match Pro v4.5 • Excluded lenders sorted by fewest reasons • © {new Date().getFullYear()} Finance Broker Tools</p>
+              <p className="mt-1">Database: {lenders.length} lender products • Hard Stop Checks: Active • Scoring: 50/40/10 • Exclusion Tracking: Active</p>
             </div>
           </div>
         </div>
